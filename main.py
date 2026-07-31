@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""AudioQuality Scanner 入口：创建 QApplication 与主窗口"""
+"""SonicCheck 入口：创建 QApplication 与主窗口"""
 
 import sys
 from pathlib import Path
