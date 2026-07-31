@@ -1,0 +1,226 @@
+/* ============================================================
+   AudioQuality Scanner 深色主题
+   参考 foobar2000 DarkOne / VS Code Dark+
+   ============================================================ */
+
+QMainWindow, QWidget {
+    background-color: #1E1E1E;
+    color: #D4D4D4;
+    font-family: "Microsoft YaHei UI", "Segoe UI", sans-serif;
+    font-size: 13px;
+}
+
+/* ---- 标题栏 ---- */
+#HeaderBar {
+    background-color: #252526;
+    border-bottom: 1px solid #3C3C3C;
+}
+#AppTitle {
+    font-size: 15px;
+    font-weight: bold;
+    color: #D4D4D4;
+}
+#VersionLabel {
+    color: #808080;
+}
+
+/* ---- 按钮 ---- */
+QPushButton {
+    background-color: #2D2D30;
+    border: 1px solid #3C3C3C;
+    border-radius: 4px;
+    padding: 6px 14px;
+    color: #D4D4D4;
+}
+QPushButton:hover {
+    background-color: #3E3E42;
+    border-color: #4A4A4F;
+}
+QPushButton:pressed {
+    background-color: #094771;
+}
+QPushButton:disabled {
+    color: #5A5A5A;
+    background-color: #252526;
+    border-color: #2D2D30;
+}
+#StartButton {
+    background-color: #007ACC;
+    border-color: #007ACC;
+    color: #FFFFFF;
+    font-weight: bold;
+}
+#StartButton:hover {
+    background-color: #1C8AD6;
+    border-color: #1C8AD6;
+}
+#StartButton:pressed {
+    background-color: #005A9E;
+}
+#LogToggle, #LogClear {
+    color: #808080;
+    border: none;
+    padding: 4px 2px;
+    text-align: left;
+}
+#LogToggle:hover, #LogClear:hover {
+    color: #D4D4D4;
+    background: transparent;
+}
+
+/* ---- 左侧面板 ---- */
+#LeftPanel {
+    background-color: #252526;
+    border-right: 1px solid #3C3C3C;
+}
+.SectionTitle {
+    color: #808080;
+    font-size: 12px;
+    letter-spacing: 2px;
+}
+#DropArea {
+    border: 1px dashed #3C3C3C;
+    border-radius: 6px;
+    color: #808080;
+    background-color: #1E1E1E;
+    padding: 12px;
+}
+#DropArea:hover {
+    border-color: #007ACC;
+    color: #D4D4D4;
+}
+#DropArea:disabled {
+    color: #4A4A4A;
+    border-color: #2D2D30;
+}
+#FolderLabel {
+    color: #808080;
+}
+#Separator {
+    background-color: #3C3C3C;
+    max-height: 1px;
+    border: none;
+    margin: 6px 0;
+}
+
+/* ---- 输入控件 ---- */
+QSpinBox, QComboBox {
+    background-color: #1E1E1E;
+    border: 1px solid #3C3C3C;
+    border-radius: 3px;
+    padding: 3px 6px;
+    color: #D4D4D4;
+}
+QSpinBox:focus, QComboBox:focus {
+    border-color: #007ACC;
+}
+QComboBox QAbstractItemView {
+    background-color: #252526;
+    border: 1px solid #3C3C3C;
+    selection-background-color: #007ACC;
+    selection-color: #FFFFFF;
+    color: #D4D4D4;
+}
+QSpinBox::up-button, QSpinBox::down-button {
+    background-color: #2D2D30;
+    border: none;
+    width: 16px;
+}
+QSpinBox::up-button:hover, QSpinBox::down-button:hover {
+    background-color: #3E3E42;
+}
+
+/* ---- 表格 ---- */
+QTableWidget {
+    background-color: #1E1E1E;
+    alternate-background-color: #252526;
+    gridline-color: #2A2A2B;
+    border: 1px solid #3C3C3C;
+    selection-background-color: #094771;
+    selection-color: #FFFFFF;
+    color: #D4D4D4;
+}
+QHeaderView::section {
+    background-color: #252526;
+    color: #808080;
+    border: none;
+    border-bottom: 1px solid #3C3C3C;
+    padding: 6px;
+}
+QTableCornerButton::section {
+    background-color: #252526;
+}
+
+/* ---- 进度条 ---- */
+QProgressBar {
+    background-color: #252526;
+    border: 1px solid #3C3C3C;
+    border-radius: 4px;
+    text-align: center;
+    color: #D4D4D4;
+    min-height: 14px;
+    max-height: 14px;
+}
+QProgressBar::chunk {
+    background-color: #007ACC;
+    border-radius: 3px;
+}
+#CurrentFileLabel {
+    color: #808080;
+}
+
+/* ---- 汇总栏 ---- */
+#SummaryBar {
+    background-color: #252526;
+    border: 1px solid #3C3C3C;
+    border-radius: 4px;
+}
+
+/* ---- 日志 ---- */
+#LogView {
+    background-color: #161616;
+    border: 1px solid #3C3C3C;
+    color: #9A9A9A;
+    font-family: Consolas, "Cascadia Mono", monospace;
+    font-size: 12px;
+}
+
+/* ---- 其他 ---- */
+QToolTip {
+    background-color: #252526;
+    color: #D4D4D4;
+    border: 1px solid #3C3C3C;
+    padding: 4px;
+}
+QScrollBar:vertical {
+    background: #1E1E1E;
+    width: 12px;
+    margin: 0;
+}
+QScrollBar::handle:vertical {
+    background: #3C3C3C;
+    min-height: 24px;
+    border-radius: 6px;
+}
+QScrollBar::handle:vertical:hover {
+    background: #4A4A4F;
+}
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+    height: 0;
+}
+QScrollBar:horizontal {
+    background: #1E1E1E;
+    height: 12px;
+    margin: 0;
+}
+QScrollBar::handle:horizontal {
+    background: #3C3C3C;
+    min-width: 24px;
+    border-radius: 6px;
+}
+QScrollBar::handle:horizontal:hover {
+    background: #4A4A4F;
+}
+QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {
+    width: 0;
+}
