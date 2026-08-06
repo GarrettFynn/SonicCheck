@@ -38,10 +38,11 @@ from widgets.quality_mark_dialog import QualityMarkDialog
 from widgets.rename_dialog import RenameDialog
 from widgets.result_table import ResultTable
 from widgets.summary_bar import SummaryBar
+from widgets.unlock_dialog import UnlockDialog
 
 APP_NAME = "SonicCheck"
 DISPLAY_NAME = "声鉴·曲库管家"
-APP_VERSION = "0.2.0"
+APP_VERSION = "1.1.0"
 ORG_NAME = "SonicCheck"
 
 DEFAULT_W, DEFAULT_H = 1200, 800
@@ -181,6 +182,7 @@ class MainWindow(QMainWindow):
         lp.stop_clicked.connect(self.on_stop_scan)
         lp.marks_clicked.connect(self.on_marks)
         lp.guide_clicked.connect(self.on_guide)
+        lp.unlock_clicked.connect(self.on_unlock)
         lp.chk_safe.toggled.connect(self._on_safe_toggled)
         self.result_table.export_clicked.connect(self.on_export_csv)
         self.result_table.rename_clicked.connect(self.on_rename)
@@ -266,6 +268,26 @@ class MainWindow(QMainWindow):
 
     def on_guide(self) -> None:
         GuideDialog(self).exec()
+
+    def on_unlock(self) -> None:
+        """格式解锁：ncm / mflac / qmc 等 → 标准音频（源文件只读）"""
+        default_out = (str(Path(self._current_folder) / "已解锁")
+                       if self._current_folder else "")
+        dialog = UnlockDialog(default_out, self)
+        dialog.exec()
+        if dialog.results:
+            ok_cnt = sum(1 for r in dialog.results if r.ok)
+            fail = [r for r in dialog.results if not r.ok]
+            self.log_panel.log(
+                f"格式解锁完成：成功 {ok_cnt} 个，失败 {len(fail)} 个")
+            for r in fail:
+                self.log_panel.log_error(
+                    f"解锁失败: {Path(r.src).name} ← {r.message}")
+            if ok_cnt:
+                out_dirs = {str(Path(r.dst).parent)
+                            for r in dialog.results if r.ok}
+                self.log_panel.log(
+                    f"解锁输出目录: {'; '.join(sorted(out_dirs))}")
 
     @property
     def safe_mode_on(self) -> bool:
@@ -385,6 +407,9 @@ class MainWindow(QMainWindow):
     def on_scan_finished(self, stopped: bool) -> None:
         self.left_panel.set_scanning(False)
         self.progress.set_current_file("—")
+        # 停止时把「等待/分析中…」的行统一标记为已取消，不再悬挂
+        cancelled_rows = self.result_table.mark_unfinished_cancelled() \
+            if stopped else 0
         self._refresh_summary()
         self._refresh_restore_enabled()
         done_items = [i for i in self._results.values()
@@ -399,8 +424,9 @@ class MainWindow(QMainWindow):
         detail = (f"真无损 {true_cnt} 首，假无损 {fake_cnt} 首，"
                   f"失败 {err_cnt} 首")
         if stopped:
+            suffix = f"，{cancelled_rows} 首已取消" if cancelled_rows else ""
             self.log_panel.log(f"扫描已停止，已出结果 {len(done_items)} 首"
-                               f"（{detail}），结果保留在表格中")
+                               f"（{detail}{suffix}），结果保留在表格中")
         else:
             self.log_panel.log(f"扫描完成：共 {len(done_items)} 首（{detail}）")
 
@@ -571,6 +597,7 @@ class MainWindow(QMainWindow):
         results = execute_move_plan(plan)
         ok_cnt = 0
         moved = []  # (new_path, old_path) 供还原清单
+        cleared_paths = []  # 已移走的音频路径：从结果表移除（与安全模式一致）
         for op, ok, err in results:
             name = Path(op.old_path).name
             if ok:
@@ -579,9 +606,15 @@ class MainWindow(QMainWindow):
                 self.log_panel.log(
                     f"已移入 {CLEAR_DIR_NAME}/: {name}（{op.group_label}）")
                 if op.kind == KIND_AUDIO:
-                    self._on_audio_renamed(op.old_path, op.new_path)
+                    cleared_paths.append(op.old_path)
             else:
                 self.log_panel.log(f"移动失败: {name} ← {err}")
+        if cleared_paths:
+            # 被清除项移出结果列表：避免后续重命名/改名误操作 _待清除 里的文件
+            for p in cleared_paths:
+                self._results.pop(p, None)
+            self.result_table.remove_rows_by_paths(cleared_paths)
+            self._refresh_summary()
         if moved:
             record_restore_map(
                 str(Path(self._current_folder) / CLEAR_DIR_NAME), moved)

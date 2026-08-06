@@ -235,10 +235,10 @@ def match_entries(items: list, entries: list) -> MatchResult:
                                             or cand['tag_artist'] in na):
                 best = cand['item']
                 break
-        # 优先级 2：文件名包含歌名
-        if best is None:
+        # 优先级 2：文件名包含歌名（过短的词易误配，要求双方 ≥2 字符）
+        if best is None and len(nt) >= 2:
             for cand in index:
-                if id(cand['item']) in used:
+                if id(cand['item']) in used or len(cand['stem']) < 2:
                     continue
                 if nt in cand['stem'] or cand['stem'] in nt:
                     best = cand['item']
