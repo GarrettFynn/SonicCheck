@@ -58,6 +58,7 @@ class LeftPanel(QFrame):
     folder_dropped = pyqtSignal(str)
     marks_clicked = pyqtSignal()      # 质量标记设置
     guide_clicked = pyqtSignal()      # 使用指南
+    unlock_clicked = pyqtSignal()     # 格式解锁（ncm/qmc → flac/wav）
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -91,6 +92,11 @@ class LeftPanel(QFrame):
         self.btn_marks = QPushButton("质量标记…", self)
         self.btn_marks.setToolTip("自定义真/假无损文件名标记的文本与位置")
         lay.addWidget(self.btn_marks)
+        self.btn_unlock = QPushButton("格式解锁…", self)
+        self.btn_unlock.setToolTip(
+            "把网易云 .ncm、QQ音乐 .mflac/.mgg/.qmc 等加密音频\n"
+            "解锁为 FLAC/WAV/MP3 等标准格式（源文件只读不动）")
+        lay.addWidget(self.btn_unlock)
 
         # 安全模式：所有产出只写安全输出目录，原文件零改动
         self.chk_safe = QCheckBox("安全模式", self)
@@ -120,6 +126,7 @@ class LeftPanel(QFrame):
         self.btn_stop.clicked.connect(self.stop_clicked)
         self.btn_marks.clicked.connect(self.marks_clicked)
         self.btn_guide.clicked.connect(self.guide_clicked)
+        self.btn_unlock.clicked.connect(self.unlock_clicked)
         self.drop_area.folder_dropped.connect(self.folder_dropped)
 
     @staticmethod

@@ -229,6 +229,20 @@ class ResultTable(QWidget):
             if cell and cell.data(PATH_ROLE) in targets:
                 self.table.removeRow(row)
 
+    def mark_unfinished_cancelled(self) -> int:
+        """扫描停止后，把仍为「等待 / 分析中…」的行标记为「已取消」。
+        返回标记数量（自然完成时没有任何未完结行，返回 0）。"""
+        count = 0
+        for row in range(self.table.rowCount()):
+            cell = self.table.item(row, 4)
+            if cell and cell.text() in ("○ 等待", "分析中…"):
+                new_cell = QTableWidgetItem("已取消")
+                new_cell.setForeground(COLOR_GRAY)
+                new_cell.setData(Qt.ItemDataRole.UserRole, None)
+                self.table.setItem(row, 4, new_cell)
+                count += 1
+        return count
+
     def _on_context_menu(self, pos) -> None:
         paths = self.selected_paths()
         if not paths:

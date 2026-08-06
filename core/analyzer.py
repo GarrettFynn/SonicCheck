@@ -23,10 +23,10 @@
 import json
 import math
 import os
+import struct
 import subprocess
 import tempfile
 import time
-import wave
 from pathlib import Path
 
 import numpy as np
@@ -66,9 +66,15 @@ class AudioAnalyzer:
         self._check_cancel()
         self._probe_original()
         self._check_cancel()
-        self._transcode()
-        self._check_cancel()
-        self._load_wav()
+        try:
+            self._transcode()
+            self._check_cancel()
+            self._load_wav()
+        except BaseException:
+            # 转码成功后加载失败也要清掉临时 WAV，否则每次分析失败都泄漏
+            # 一个文件（曾致 %TEMP%\AudioQualityScanner 堆积 82GB）
+            self.cleanup()
+            raise
 
     # ---------------- 基础设施 ----------------
     def _check_cancel(self) -> None:
@@ -106,6 +112,21 @@ class AudioAnalyzer:
 
     # ---------------- 阶段 1：ffprobe 元数据 ----------------
     @staticmethod
+    def _to_int(val, default: int = 0) -> int:
+        """ffprobe 数值字段容错：缺失/"N/A"/浮点字符串一律不炸"""
+        try:
+            return int(float(val))
+        except (TypeError, ValueError):
+            return default
+
+    @staticmethod
+    def _to_float(val, default: float = 0.0) -> float:
+        try:
+            return float(val)
+        except (TypeError, ValueError):
+            return default
+
+    @staticmethod
     def _read_tag(tags: dict, key: str) -> str:
         """容器标签大小写不敏感读取（TITLE/Title/title 等）"""
         for k, v in (tags or {}).items():
@@ -127,12 +148,16 @@ class AudioAnalyzer:
             )
             if result.returncode == 0 and result.stdout:
                 info = json.loads(result.stdout)
-                s = info.get('streams', [{}])[0]
+                streams = info.get('streams') or [{}]
+                # 取第一个音频流：内嵌封面（视频流）可能排在 streams[0]，
+                # 直接取下标 0 会把采样率/位深读成 0
+                s = next((st for st in streams
+                          if st.get('codec_type') == 'audio'), streams[0])
                 fmt = info.get('format', {})
-                bps = s.get('bits_per_sample', 0)
+                bps = self._to_int(s.get('bits_per_sample', 0))
                 if bps == 0:
                     # 坑3：FLAC 位深度 fallback（保留旧脚本逻辑）
-                    bps = s.get('bits_per_raw_sample', 0)
+                    bps = self._to_int(s.get('bits_per_raw_sample', 0))
                 # M4.5：读取歌名/歌手标签（去重分组与标签改名依赖）
                 # 优先 format.tags，缺失时回退 stream.tags
                 fmt_tags = fmt.get('tags', {}) or {}
@@ -143,12 +168,14 @@ class AudioAnalyzer:
                           or self._read_tag(st_tags, 'artist')
                           or self._read_tag(fmt_tags, 'album_artist'))
                 self.raw_meta = {
-                    'sample_rate': int(s.get('sample_rate', 0) or 0),
-                    'channels': int(s.get('channels', 0) or 0),
-                    'bit_depth': int(bps or 0),
+                    'sample_rate': self._to_int(s.get('sample_rate', 0)),
+                    'channels': self._to_int(s.get('channels', 0)),
+                    'bit_depth': bps,
                     'codec': s.get('codec_name', 'unknown'),
-                    'bitrate': int(s.get('bit_rate', 0) or fmt.get('bit_rate', 0) or 0),
-                    'duration': float(s.get('duration', 0) or fmt.get('duration', 0) or 0),
+                    'bitrate': self._to_int(s.get('bit_rate', 0))
+                               or self._to_int(fmt.get('bit_rate', 0)),
+                    'duration': self._to_float(s.get('duration', 0))
+                                or self._to_float(fmt.get('duration', 0)),
                     'title': title,
                     'artist': artist,
                 }
@@ -213,32 +240,75 @@ class AudioAnalyzer:
 
     # ---------------- 阶段 3：numpy 向量化加载 ----------------
     def _load_wav(self) -> None:
-        with wave.open(self.wav_path, 'rb') as w:
-            self.nchannels = w.getnchannels()
-            self.framerate = w.getframerate()
-            width = w.getsampwidth()
-            max_frames = min(w.getnframes(),
-                             self.framerate * self.analyze_seconds)
-            raw = w.readframes(max_frames)
+        # 不用标准库 wave：ffmpeg 写 pcm_s32le 时 WAV 头为
+        # WAVE_FORMAT_EXTENSIBLE（格式标签 65534），Python<3.12 的
+        # wave 模块直接报 "unknown format: 65534"。这里手动解析 RIFF，
+        # 遇到 65534 时读 SubFormat GUID 取真实格式，全版本通用。
+        with open(self.wav_path, 'rb') as f:
+            buf = f.read()
+        if len(buf) < 12 or buf[0:4] != b'RIFF' or buf[8:12] != b'WAVE':
+            raise ValueError("临时文件不是有效的 WAV/RIFF")
 
-        if width == 4:
-            samples = np.frombuffer(raw, dtype='<i4').astype(np.float64) \
-                / 2147483648.0
-        elif width == 2:
-            samples = np.frombuffer(raw, dtype='<i2').astype(np.float64) \
-                / 32768.0
-        elif width == 1:
-            samples = (np.frombuffer(raw, dtype=np.uint8).astype(np.float64)
-                       - 128.0) / 128.0
-        elif width == 3:
-            # 统一转码后不会走到这里，保留兜底（与旧脚本 3 字节解析等价）
-            b = np.frombuffer(raw, dtype=np.uint8)
-            b = b[:len(b) // 3 * 3].reshape(-1, 3).astype(np.int32)
-            vals = b[:, 0] | (b[:, 1] << 8) | (b[:, 2] << 16)
-            vals = np.where(vals & 0x800000, vals - 0x1000000, vals)
-            samples = vals.astype(np.float64) / 8388608.0
+        fmt = None
+        raw = None
+        pos = 12
+        while pos + 8 <= len(buf) and (fmt is None or raw is None):
+            cid = buf[pos:pos + 4]
+            size = struct.unpack_from('<I', buf, pos + 4)[0]
+            body = buf[pos + 8:pos + 8 + size]
+            if cid == b'fmt ':
+                fmt = body
+            elif cid == b'data':
+                raw = body
+            pos += 8 + size + (size & 1)  # 块按 2 字节对齐
+
+        if fmt is None or raw is None:
+            raise ValueError("WAV 缺少 fmt 或 data 块")
+        if len(fmt) < 16:
+            raise ValueError("WAV fmt 块长度异常")
+
+        tag, self.nchannels = struct.unpack_from('<HH', fmt, 0)
+        self.framerate = struct.unpack_from('<I', fmt, 4)[0]
+        bits = struct.unpack_from('<H', fmt, 14)[0]
+        if tag == 0xFFFE:
+            # WAVE_FORMAT_EXTENSIBLE：SubFormat GUID 前 2 字节是真实格式
+            if len(fmt) < 26:
+                raise ValueError("WAV extensible fmt 块长度异常")
+            tag = struct.unpack_from('<H', fmt, 24)[0]
+
+        if tag == 3:            # IEEE float
+            if bits == 32:
+                samples = np.frombuffer(raw, dtype='<f4').astype(np.float64)
+            elif bits == 64:
+                samples = np.frombuffer(raw, dtype='<f8')
+            else:
+                raise ValueError(f"不支持的浮点位深度: {bits}bit")
+        elif tag == 1:          # PCM 整型
+            width = bits // 8
+            if width == 4:
+                samples = np.frombuffer(raw, dtype='<i4').astype(np.float64) \
+                    / 2147483648.0
+            elif width == 2:
+                samples = np.frombuffer(raw, dtype='<i2').astype(np.float64) \
+                    / 32768.0
+            elif width == 1:
+                samples = (np.frombuffer(raw, dtype=np.uint8).astype(np.float64)
+                           - 128.0) / 128.0
+            elif width == 3:
+                # 统一转码后不会走到这里，保留兜底（与旧脚本 3 字节解析等价）
+                b = np.frombuffer(raw, dtype=np.uint8)
+                b = b[:len(b) // 3 * 3].reshape(-1, 3).astype(np.int32)
+                vals = b[:, 0] | (b[:, 1] << 8) | (b[:, 2] << 16)
+                vals = np.where(vals & 0x800000, vals - 0x1000000, vals)
+                samples = vals.astype(np.float64) / 8388608.0
+            else:
+                raise ValueError(f"不支持的位深度: {bits}bit")
         else:
-            raise ValueError(f"不支持的位深度: {width * 8}bit")
+            raise ValueError(f"不支持的 WAV 格式标签: {tag}")
+
+        # 与旧逻辑一致：最多取 analyze_seconds 秒
+        max_frames = self.framerate * self.analyze_seconds
+        samples = samples[:max_frames * self.nchannels]
 
         # 去交错分声道（替代旧脚本的列表推导）
         self.channels = [samples[ch::self.nchannels].copy()
