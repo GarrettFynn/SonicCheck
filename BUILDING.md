@@ -1,64 +1,49 @@
-# 打包说明（M5）—— 声鉴·曲库管家 SonicCheck
+# 打包指南（BUILDING）
 
-目标产物：`dist\SonicCheck\SonicCheck.exe`，整个目录即绿色版（预计 ~300MB），可整体拷贝分发。
+SonicCheck 使用 PyInstaller 打包为 Windows onedir 绿色版：`dist\SonicCheck\` 整个目录可解压即用，目标机器无需安装 Python。
 
-## 一、打包前置：放置内置 ffmpeg（一次性）
+## 前置条件
 
-1. 下载 Gyan 官方 release essentials 静态构建：
-   https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip
-   （文件名形如 `ffmpeg-7.x-essentials_build.zip`，约 80MB）
-2. 解压，从 `bin\` 里取出两个文件：
-   - `ffmpeg.exe`
-   - `ffprobe.exe`
-3. 放到项目根目录的 `resources\ffmpeg\` 下，最终结构：
-
-```
-AudioQualityScanner/
-├── resources/
-│   ├── ffmpeg/
-│   │   ├── ffmpeg.exe      ← 必须
-│   │   └── ffprobe.exe     ← 必须（缺它无法分析）
-│   ├── icon.ico
-│   ├── icon.png
-│   └── style.qss
-├── build.spec
-└── build.bat
+```bash
+pip install -r requirements.txt
+pip install pyinstaller
 ```
 
-> 忘记放也不阻断打包：exe 会退而去系统 PATH 找 ffmpeg；
-> 也可以打包后手动复制到 `dist\SonicCheck\resources\ffmpeg\`，效果相同。
+- Python ≥ 3.10（开发用 3.11/3.12 均验证过）
+- `resources/ffmpeg/` 下已放置 `ffmpeg.exe` 与 `ffprobe.exe`（随包分发）
 
-## 二、执行打包
+## 一键打包
 
-双击 `build.bat`（或在项目根目录运行它）。脚本会依次：
+```bat
+build.bat
+```
 
-1. 检查 Python（需 3.10+，已在 PATH）
-2. 安装/升级依赖：PyQt6、numpy、PyInstaller
-3. 检查 `resources\ffmpeg\` 是否就位（缺失会警告并暂停确认）
-4. 执行 `PyInstaller --noconfirm --clean build.spec`
+等价于：
 
-完成后产物在 `dist\SonicCheck\`。
+```bat
+pyinstaller --noconfirm --clean --windowed --name SonicCheck ^
+    --icon resources\icon.ico ^
+    --add-data "resources;resources" ^
+    --exclude-module tests ^
+    main.py
+```
 
-## 三、打包后自检清单（用户本机）
+产物：`dist\SonicCheck\`，入口 `SonicCheck.exe`。
 
-- [ ] 双击 `SonicCheck.exe` 能启动，窗口标题为「声鉴·曲库管家 SonicCheck v0.2.0」
-- [ ] 图标正常显示（任务栏 + exe 文件图标）
-- [ ] 选一个含 FLAC/WAV 的文件夹完整扫描一遍，判定结果与开发环境一致
-- [ ] 日志中没有 ffmpeg/ffprobe 找不到的报错
-- [ ] 把 `dist\SonicCheck` 拷到**没有装 Python 和 ffmpeg 的机器**上复测一次
+## 发版前检查清单
 
-## 四、常见问题
+1. **跑全量测试**：`python tests\run_all.py`（自动发现 `tests\test_*.py`，任一失败退出码非 0）
+2. **确认版本号**：`main_window.py` 顶部 `APP_VERSION`（窗口标题、QSettings、发布说明共用）
+3. **确认 ffmpeg 已内置**：`resources\ffmpeg\ffmpeg.exe` / `ffprobe.exe` 存在
+4. 打包后**实机冒烟**：双击 exe → 扫描一个文件夹 → 解锁一个 ncm/mflac 文件
 
-| 问题 | 处理 |
-|------|------|
-| 杀毒软件报毒 | PyInstaller 引导程序常见误报，加白名单即可（本包未用 UPX 已是低误报配置） |
-| 启动闪退 | 把 `build.spec` 里 `console=False` 临时改成 `True` 重打包，看控制台报错 |
-| 找不到 ffmpeg | 确认 `resources\ffmpeg\ffmpeg.exe` 与 `ffprobe.exe` 都存在（exe 同级目录下） |
-| 体积远超预期 | 确认没有装 scipy/pandas/matplotlib 等无关大包（spec 已显式排除） |
-| 设置不生效 | 首次改名后 QSettings 重置过一次，此后正常记忆 |
+## 目录布局说明（PyInstaller 6+）
 
-## 五、后续改名
+打包后数据资源位于 `dist\SonicCheck\_internal\resources\`，代码通过
+`sys._MEIPASS` 定位（`main_window.resource_path()` 与
+`core/ffmpeg_locator._bundled_candidates()` 均已兼容），无需手工搬运。
 
-若要换软件英文名：改 `build.spec` 顶部 `APP_EXE_NAME` 与 `main_window.py` 的
-`APP_NAME` / `DISPLAY_NAME` / `ORG_NAME`（四处保持一致），删除 `dist\`、`build\` 后重打。
-注意改 `ORG_NAME` 会让用户设置（上次文件夹/窗口尺寸）重置一次。
+## 分发注意（GPL v3）
+
+本项目以 GPL v3 发布（依赖 PyQt6）。分发 exe 时必须同时提供源码获取方式，
+并在发布页声明许可证。ffmpeg 官方静态构建的许可见其发布页说明。
