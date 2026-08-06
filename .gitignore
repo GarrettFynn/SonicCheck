@@ -1,4 +1,4 @@
-﻿# Python
+# Python
 __pycache__/
 *.pyc
 *.pyo
@@ -20,3 +20,15 @@ build/
 # 系统
 Thumbs.db
 desktop.ini
+
+# 发布物料（安装包不入库，放 GitHub Release Assets）
+*.zip
+
+# 内置 ffmpeg 二进制（约 193MB，不入库；打包前按 BUILDING.md 放置）
+resources/ffmpeg/
+
+# 本地测试样本（私有曲库文件，体积大）
+_test_real/
+
+# 本地回归测试（不公开，仅开发机使用）
+tests/
