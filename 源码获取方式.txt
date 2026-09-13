@@ -1,0 +1,6 @@
+本软件以 GPL v3 许可证开源。
+完整源代码获取地址：
+https://github.com/GarrettFynn/SonicCheck
+
+许可证全文见：
+https://www.gnu.org/licenses/gpl-3.0.txt
