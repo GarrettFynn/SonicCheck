@@ -72,8 +72,11 @@ class MainWindow(QMainWindow):
         self._load_marks_config()
         self._build_ui()
         self._connect_signals()
-        self._restore_state()
+        # 引擎初始化必须先于状态恢复：_restore_state 恢复上次文件夹会走到
+        # _refresh_restore_enabled → 读 _scan_manager，晚于此处初始化会
+        # AttributeError（v1.1.0 起的存量启动崩溃，扫描后重启即触发）
         self._init_engine()
+        self._restore_state()
         self.log_panel.log("程序启动，请选择或拖拽一个音乐文件夹")
         self._refresh_restore_enabled()
         self._update_safe_label()
@@ -329,8 +332,10 @@ class MainWindow(QMainWindow):
 
     def _refresh_restore_enabled(self) -> None:
         """还原按钮：非安全模式、非扫描中、当前文件夹有可还原记录时可用"""
+        # 兜底：初始化早期（_scan_manager 未建）也允许调用，视为非扫描中
+        mgr = getattr(self, '_scan_manager', None)
         ok = (not self.safe_mode_on
-              and not self._scan_manager.is_running
+              and (mgr is None or not mgr.is_running)
               and bool(self._current_folder)
               and bool(load_restore_map(
                   str(Path(self._current_folder) / CLEAR_DIR_NAME))))
