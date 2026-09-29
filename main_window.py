@@ -725,11 +725,16 @@ class MainWindow(QMainWindow):
             self.log_panel.log("歌单没有匹配到任何文件，未执行复制")
             return
 
-        copied, failed, dest_dir = copy_matched(
-            mr.matched,
-            str(self._safe_root()) if self.safe_mode_on
-            else self._current_folder,
-            dialog.playlist_name)
+        try:
+            copied, failed, dest_dir = copy_matched(
+                mr.matched,
+                str(self._safe_root()) if self.safe_mode_on
+                else self._current_folder,
+                dialog.playlist_name)
+        except OSError as exc:
+            # 歌单名净化后仍可能撞 Windows 保留名/目标被占用等
+            self.log_panel.log_error(f"歌单文件夹创建失败: {exc}")
+            return
         audio_copied = len({c[1] for c in copied})
         if self.safe_mode_on:
             self.log_panel.log(f"安全模式：歌单文件夹建在安全输出目录 {dest_dir}")

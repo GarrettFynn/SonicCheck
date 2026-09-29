@@ -244,6 +244,63 @@ def test_dedup_false_positive_guards():
         sys.exit(1)
 
 
+def test_playlist_parsing_guards():
+    """v1.2.0 歌单解析三修回归：编号剥离 / GBK 回退 / 复制同名消歧"""
+    print("6. playlist：解析编号剥离 / GBK 回退 / 复制同名消歧")
+    pl = playlist
+
+    # 「01 - 晴天 - 周杰伦」——歌单最常见格式之一，旧版解析成 title=01
+    e = pl._parse_line('01 - 晴天 - 周杰伦')
+    check('编号+短横剥离', (e.title, e.artist) == ('晴天', '周杰伦'),
+          f'{e.title}|{e.artist}')
+    e2 = pl._parse_line('12 - 海阔天空')
+    check('编号+短横（无歌手）', e2.title == '海阔天空', e2.title)
+    e3 = pl._parse_line('01 晴天 - 周杰伦')   # 编号后无短横
+    check('裸编号兜底剥离', (e3.title, e3.artist) == ('晴天', '周杰伦'),
+          f'{e3.title}|{e3.artist}')
+    e4 = pl._parse_line('1998 - 陈奕迅')        # 4 位数字=歌名，不剥
+    check('四位数字不误剥', e4.title == '1998', e4.title)
+    e5 = pl._parse_line('晴天 - 周杰伦')        # 无编号行为不变
+    check('无编号不受影响', (e5.title, e5.artist) == ('晴天', '周杰伦'))
+
+    # GBK 歌单回退：旧版 utf-8+replace 整单乱码
+    gbk_file = Path(tempfile.mkdtemp(prefix='gbk_')) / '歌单.txt'
+    gbk_file.write_bytes('晴天 - 周杰伦'.encode('gb18030'))
+    entries, _name = pl.parse_playlist_file(str(gbk_file))
+    check('GBK 歌单可读', bool(entries) and entries[0].title == '晴天',
+          str(entries[:1]))
+
+    # 复制消歧：跨子目录同名不同大小 → (n) 序号而非静默丢歌
+    d6 = Path(tempfile.mkdtemp(prefix='copy_'))
+    (d6 / 'a').mkdir()
+    (d6 / 'b').mkdir()
+    items = [make_item(d6 / 'a', '晴天.flac'),
+             make_item(d6 / 'b', '晴天.flac')]
+    # make_item 会写同内容占位，重新写入不同大小以区分两首同名歌
+    (d6 / 'a' / '晴天.flac').write_bytes(b'x' * 100)
+    (d6 / 'b' / '晴天.flac').write_bytes(b'y' * 200)
+    mr = pl.MatchResult()
+    mr.matched = [(pl.PlaylistEntry('晴天', ''), items[0]),
+                  (pl.PlaylistEntry('晴天', ''), items[1])]
+    copied, failed, dest = pl.copy_matched(mr.matched, str(d6), '测试歌单')
+    out_names = sorted(Path(c[1]).name for c in copied)
+    check('同名两首都复制', out_names == ['晴天 (1).flac', '晴天.flac'],
+          str(out_names))
+    check('复制无失败', not failed, str(failed))
+    # 幂等：重跑不产生副本
+    copied2, _, _ = pl.copy_matched(mr.matched, str(d6), '测试歌单')
+    check('重跑幂等', len(copied2) == 2
+          and sorted(Path(c[1]).name for c in copied2)
+          == ['晴天 (1).flac', '晴天.flac'])
+
+    failed = [n for n, ok in PASS if not ok]
+    print(f"  结果: {len(PASS)} 项中失败 {len(failed)} 项")
+    if failed:
+        print("失败项:", failed)
+        sys.exit(1)
+
+
 if __name__ == '__main__':
     main()
     test_dedup_false_positive_guards()
+    test_playlist_parsing_guards()

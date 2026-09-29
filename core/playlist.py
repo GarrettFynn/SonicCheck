@@ -53,6 +53,9 @@ class MatchResult:
 # ---------------- 解析 ----------------
 _LINE_PREFIX = re.compile(
     r'^\s*(?:[-*+>]\s+|#{1,6}\s*|\d+[.、)]\s*|`+)')
+# 「01 - 晴天 - 周杰伦」式编号（两位编号+空格短横）是歌单最常见格式之一，
+# _LINE_PREFIX 只覆盖 01./01、/01) 三种，此处补齐（限 1~3 位防误剥年份）
+_NUM_DASH_PREFIX = re.compile(r'^\s*\d{1,3}\s+[-–—]\s+')
 _SPLIT = re.compile(r'\s+[-–—]\s+')
 
 
@@ -61,7 +64,9 @@ def _norm(text: str) -> str:
 
 
 def _parse_line(line: str) -> PlaylistEntry:
-    line = _LINE_PREFIX.sub('', line).strip().strip('`').strip()
+    line = _LINE_PREFIX.sub('', line)
+    line = _NUM_DASH_PREFIX.sub('', line, count=1)
+    line = line.strip().strip('`').strip()
     if not line:
         return PlaylistEntry("")
     if '\t' in line:  # 网页表格复制：歌名⇥歌手⇥…（取前两列）
@@ -70,8 +75,12 @@ def _parse_line(line: str) -> PlaylistEntry:
             return PlaylistEntry(cols[0], cols[1] if len(cols) > 1 else "")
     parts = _SPLIT.split(line, maxsplit=1)
     if len(parts) == 2:
-        return PlaylistEntry(parts[0].strip(), parts[1].strip())
-    return PlaylistEntry(line)
+        title, artist = parts[0].strip(), parts[1].strip()
+    else:
+        title, artist = line, ""
+    # 兜底：歌名以「编号 空格」开头（01 晴天 - 周杰伦）时剥掉编号
+    title = re.sub(r'^\d{1,3}\s+', '', title, count=1)
+    return PlaylistEntry(title, artist)
 
 
 def parse_playlist_text(text: str) -> list:
@@ -112,9 +121,16 @@ def parse_playlist_text(text: str) -> list:
 
 
 def parse_playlist_file(path: str) -> tuple:
-    """读取 md/csv/txt 歌单文件，返回 (entries, 建议歌单名=文件名 stem)"""
+    """读取 md/csv/txt 歌单文件，返回 (entries, 建议歌单名=文件名 stem)。
+
+    编码：先按 utf-8（含 BOM）严格解码，失败回退 gb18030——国内导出的
+    txt 歌单 GBK 编码很常见，旧实现 utf-8+replace 会整单变乱码替换符。
+    """
     p = Path(path)
-    text = p.read_text(encoding='utf-8-sig', errors='replace')
+    try:
+        text = p.read_text(encoding='utf-8-sig')
+    except UnicodeDecodeError:
+        text = p.read_text(encoding='gb18030', errors='replace')
     return parse_playlist_text(text), p.stem
 
 
@@ -276,13 +292,23 @@ def match_entries(items: list, entries: list) -> MatchResult:
 def copy_matched(matched: list, target_root: str, playlist_name: str) -> tuple:
     """复制匹配文件到 <target_root>/<歌单名>/，返回 (copied, failed, dest_dir)
 
-    copied/failed 为 [(src, dst)] / [(src, error)]；同 stem .lrc 一并复制；
-    目标已存在则跳过并记为 copied（幂等，重跑不产生副本）。
+    copied/failed 为 [(src, dst)] / [(src, error)]；同 stem .lrc 一并复制。
+    目标已存在且与源同大小 → 幂等跳过（重跑同歌单不产生副本）；
+    大小不同 → 跨子目录同名歌曲，自动加 (n) 序号消歧（旧实现直接
+    跳过，同名不同音质的第二首会静默丢歌）。复制中途失败清掉半截
+    目标文件，重跑不被"幂等跳过"误判为已完成。
     """
     folder = sanitize_filename(playlist_name) or "新歌单"
     dest_dir = Path(target_root) / folder
     dest_dir.mkdir(parents=True, exist_ok=True)
     copied, failed = [], []
+
+    def _same_size(a: Path, b: Path) -> bool:
+        try:
+            return a.stat().st_size == b.stat().st_size
+        except OSError:
+            return False
+
     for _entry, item in matched:
         src = Path(item.filepath)
         candidates = [src]
@@ -292,9 +318,31 @@ def copy_matched(matched: list, target_root: str, playlist_name: str) -> tuple:
         for f in candidates:
             dst = dest_dir / f.name
             try:
-                if not dst.exists():
+                done = False
+                if dst.exists():
+                    if _same_size(dst, f):
+                        done = True   # 幂等：上次已复制过这份
+                    else:
+                        # 同名异大小：另一首同名歌，找 (n) 空位或既有副本
+                        n = 1
+                        while True:
+                            cand = dest_dir / f"{f.stem} ({n}){f.suffix}"
+                            if not cand.exists():
+                                dst = cand
+                                break
+                            if _same_size(cand, f):
+                                dst = cand   # 这份此前已复制
+                                done = True
+                                break
+                            n += 1
+                if not done:
                     shutil.copy2(f, dst)
                 copied.append((str(f), str(dst)))
             except OSError as exc:
+                try:  # 清半截文件：重跑时才不会被幂等跳过误判
+                    if dst.exists():
+                        dst.unlink()
+                except OSError:
+                    pass
                 failed.append((str(f), str(exc)))
     return copied, failed, str(dest_dir)
