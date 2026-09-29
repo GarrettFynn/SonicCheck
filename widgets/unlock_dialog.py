@@ -7,6 +7,7 @@
 强制 FLAC/WAV 时对无损内层是无损重封装，对有损内层只是换容器。
 """
 
+import os
 import threading
 from pathlib import Path
 
@@ -104,7 +105,10 @@ class UnlockDialog(QDialog):
         self._cancel_import = threading.Event()
         self._running = False
         self._pool = QThreadPool(self)
-        self._pool.setMaxThreadCount(1)
+        # B2：并行解锁（单文件 RC4 解密是纯 Python CPU 密集，批量吞吐
+        # 靠多文件并行提升）；并发安全已由 EkeyStore 合并落盘与
+        # unlock._unique_path 预留集合保证
+        self._pool.setMaxThreadCount(min(4, os.cpu_count() or 2))
         self._row_of: dict = {}
         self._fmt_tags: dict = {}  # path → 'NCM'/'QMC'（完成后行内保留前缀）
 
@@ -339,7 +343,7 @@ class UnlockDialog(QDialog):
 
     # ---------------- 执行 ----------------
     def _on_start(self) -> None:
-        if self._running or not self._files:
+        if self._running or self._importing or not self._files:
             return
         out_dir = self._out_dir()
         if not out_dir:

@@ -19,6 +19,7 @@
 import json
 import struct
 import sys
+import threading
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -157,7 +158,13 @@ def parse_musicex_info_from_bytes(data: bytes, total_size: int = 0) -> dict:
 # ══════════════════════════════════════════════════════════════════
 
 class EkeyStore:
-    """ekey 与登录态的本地持久化。ekey 按 song_mid 与文件名双键索引。"""
+    """ekey 与登录态的本地持久化。ekey 按 song_mid 与文件名双键索引。
+
+    并发语义（B2）：并行解锁时各 worker 持有独立实例，save() 在模块锁
+    内先重读磁盘再合并写入（read-modify-write 收敛），否则两个实例
+    互相整体覆盖会静默丢掉对方刚存入的 ekey。"""
+
+    _IO_LOCK = threading.Lock()   # 跨实例串行化合并落盘
 
     def __init__(self, path=None):
         self.path = Path(path) if path else STORE_PATH
@@ -176,18 +183,28 @@ class EkeyStore:
             pass
 
     def save(self) -> None:
-        try:
-            self.path.parent.mkdir(parents=True, exist_ok=True)
-            tmp = self.path.with_suffix('.tmp')
-            tmp.write_text(json.dumps({
-                'ekeys': self._ekeys,
-                # cookie 是登录态：Windows 下 DPAPI 加密落盘，防明文泄露
-                'cookie': _encrypt_cookie(self._cookie),
-                'uin': self._uin,
-            }, ensure_ascii=False, indent=1), encoding='utf-8')
-            tmp.replace(self.path)
-        except OSError:
-            pass
+        with self._IO_LOCK:
+            # 合并落盘：磁盘上的键（可能是其他实例刚写入的）先并入，
+            # 本实例新增的键优先，避免 last-writer-wins 覆盖丢数据
+            try:
+                disk = json.loads(self.path.read_text(encoding='utf-8'))
+                merged = dict(disk.get('ekeys') or {})
+            except (OSError, ValueError):
+                merged = {}
+            merged.update(self._ekeys)
+            self._ekeys = merged
+            try:
+                self.path.parent.mkdir(parents=True, exist_ok=True)
+                tmp = self.path.with_suffix('.tmp')
+                tmp.write_text(json.dumps({
+                    'ekeys': self._ekeys,
+                    # cookie 是登录态：Windows 下 DPAPI 加密落盘，防明文泄露
+                    'cookie': _encrypt_cookie(self._cookie),
+                    'uin': self._uin,
+                }, ensure_ascii=False, indent=1), encoding='utf-8')
+                tmp.replace(self.path)
+            except OSError:
+                pass
 
     # ── ekey ──
     @staticmethod

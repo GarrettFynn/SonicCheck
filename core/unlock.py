@@ -19,6 +19,7 @@ import base64
 import io
 import json
 import struct
+import threading
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -566,17 +567,30 @@ class _QmcRc4Cipher:
 
     def _dec_a_segment(self, buf: bytearray, off: int, length: int,
                        offset: int) -> None:
+        # 微优化（B2）：PRGA 每字节 3 次取模换条件减法 + 全局部变量绑定，
+        # 单线程吞吐约 2 倍；数值口径与取模版严格一致（和 < 2n，单次减法即可）
         b = list(self.box)
         n = self.n
         j = k = 0
         skip_len = (offset % self.SEG) + self._segment_skip(offset // self.SEG)
         i = -skip_len
+        pos = off
         while i < length:
-            j = (j + 1) % n
-            k = (b[j] + k) % n
-            b[j], b[k] = b[k], b[j]
+            j += 1
+            if j == n:
+                j = 0
+            t = b[j]
+            k += t
+            if k >= n:
+                k -= n
+            b[j] = b[k]
+            b[k] = t
             if i >= 0:
-                buf[off + i] ^= b[(b[j] + b[k]) % n]
+                s = t + b[j]      # b[j] 已是交换后的旧 b[k]，与旧式 b[j]+b[k] 等价
+                if s >= n:
+                    s -= n
+                buf[pos] ^= b[s]
+                pos += 1
             i += 1
 
     def decrypt_into(self, buf: np.ndarray, file_offset: int) -> None:
@@ -604,7 +618,8 @@ class _QmcRc4Cipher:
             processed += self.SEG
         if to_process > 0:
             self._dec_a_segment(raw, processed, to_process, offset)
-        buf[:] = np.frombuffer(bytes(raw), dtype=np.uint8)
+        # bytearray 可直接 frombuffer（零拷贝视图），省掉原先 bytes(raw) 整块复制
+        buf[:] = np.frombuffer(raw, dtype=np.uint8)
 
 
 def _qmc_cipher_for(real_key: bytes):
@@ -882,13 +897,33 @@ def _base_name(src: str, info: dict) -> str:
     return sanitize_filename(name) or Path(src).stem or "未命名"
 
 
+# 并行解锁的输出路径分配（B2）：跨线程防同名覆盖
+_OUT_NAME_LOCK = threading.Lock()
+_RESERVED_DST: set = set()
+
+
 def _unique_path(directory: Path, name: str, ext: str) -> Path:
-    dst = directory / f"{name}{ext}"
-    n = 1
-    while dst.exists():
-        dst = directory / f"{name} ({n}){ext}"
-        n += 1
-    return dst
+    """分配不冲突的输出路径（并发安全）。
+
+    除磁盘存在性外同时查本进程预留集合：多线程并行解锁时，两个线程
+    可能同时为同名文件拿到同一个"尚不存在"的目标路径（TOCTOU 竞态，
+    磁盘 exists() 在双方查询时都返回 False），后者会覆盖前者的输出。
+    预留集合补上这个窗口，unlock_file 落盘或失败后释放。"""
+    with _OUT_NAME_LOCK:
+        dst = directory / f"{name}{ext}"
+        n = 1
+        while dst.exists() or str(dst).lower() in _RESERVED_DST:
+            dst = directory / f"{name} ({n}){ext}"
+            n += 1
+        _RESERVED_DST.add(str(dst).lower())
+        return dst
+
+
+def _release_dst(dst) -> None:
+    """释放 _unique_path 的预留（文件已落盘则磁盘 exists() 自然接管）"""
+    if dst:
+        with _OUT_NAME_LOCK:
+            _RESERVED_DST.discard(str(dst).lower())
 
 
 def _mux_timeout_for(path: str) -> int:
@@ -1072,6 +1107,7 @@ def unlock_file(src: str, out_dir: str, target: str = 'auto',
     src_path = Path(src)
     result = UnlockResult(ok=False, src=str(src_path))
     raw_path = ''
+    dst = None
     try:
         enc_type = detect_encrypted_type(src_path)
         if not enc_type:
@@ -1140,6 +1176,7 @@ def unlock_file(src: str, out_dir: str, target: str = 'auto',
         result.message = f"文件读写失败: {exc}"
         return result
     finally:
+        _release_dst(dst)  # 落盘成功后磁盘 exists() 接管；失败则允许重用名
         if raw_path:  # 异常路径兜底，杜绝临时文件泄漏
             try:
                 Path(raw_path).unlink()
