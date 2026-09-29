@@ -370,6 +370,8 @@ class MainWindow(QMainWindow):
         self.summary_bar.reset()
         self.result_table.set_actions_enabled(False)
 
+        # B1：批量模式插行（排序/过滤推迟到扫描结束统一处理）
+        self.result_table.begin_update()
         for fp in files:
             self.result_table.add_row(ResultItem(
                 filename=Path(fp).name, stem=Path(fp).stem, filepath=fp))
@@ -407,6 +409,8 @@ class MainWindow(QMainWindow):
     def on_scan_finished(self, stopped: bool) -> None:
         self.left_panel.set_scanning(False)
         self.progress.set_current_file("—")
+        # B1：退出批量模式——恢复排序/过滤（含停止路径，必须最先执行）
+        self.result_table.end_update()
         # 停止时把「等待/分析中…」的行统一标记为已取消，不再悬挂
         cancelled_rows = self.result_table.mark_unfinished_cancelled() \
             if stopped else 0
