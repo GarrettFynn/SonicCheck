@@ -32,6 +32,29 @@ class _WorkerSignals(QObject):
     file_done = pyqtSignal(int, object)    # 列表行号, UnlockResult
     finished = pyqtSignal(bool)            # True = 被取消
     key_import_done = pyqtSignal(object)   # ensure_ekeys 统计 dict
+    scan_progress = pyqtSignal(int)        # 文件夹扫描：已检查候选数
+    scan_done = pyqtSignal(object)         # {'files': [], 'corrupt': n}
+
+
+class _ScanWorker(QRunnable):
+    """后台递归扫描文件夹内的加密音频（大曲库 rglob 不再冻结 UI）"""
+
+    def __init__(self, folder: str, cancel: threading.Event):
+        super().__init__()
+        self.folder = folder
+        self.cancel = cancel
+        self.signals = _WorkerSignals()
+
+    def run(self) -> None:
+        try:
+            files, corrupt = find_encrypted_files(
+                self.folder,
+                progress_cb=lambda n: self.signals.scan_progress.emit(n),
+                cancel_check=self.cancel.is_set)
+            self.signals.scan_done.emit({'files': files, 'corrupt': corrupt})
+        except Exception as exc:  # 保底：扫描异常也走正常收尾
+            self.signals.scan_done.emit({'files': [], 'corrupt': 0,
+                                         'error': str(exc)})
 
 
 class _UnlockWorker(QRunnable):
@@ -183,6 +206,8 @@ class UnlockDialog(QDialog):
         row_key.addWidget(self.btn_qq_guide)
         lay.addLayout(row_key)
         self._importing = False
+        self._scanning = False
+        self._scan_cancel = threading.Event()
         self._refresh_key_status()
 
         # ── 进度 ──
@@ -321,15 +346,54 @@ class UnlockDialog(QDialog):
             self._add(paths)
 
     def _on_add_folder(self) -> None:
+        if self._running or self._importing or self._scanning:
+            return
         folder = QFileDialog.getExistingDirectory(self, "选择文件夹")
-        if folder:
-            found = find_encrypted_files(folder)
-            if not found:
-                self.status_label.setText("该文件夹内没有可识别的加密音频")
+        if not folder:
+            return
+        # B5：rglob + 逐文件读头移入后台（万级曲库曾在 UI 线程冻结数十秒）
+        self._scanning = True
+        self._scan_cancel.clear()
+        self.btn_add_files.setEnabled(False)
+        self.btn_add_folder.setText("扫描中…")
+        self.btn_add_folder.setEnabled(False)
+        self.btn_clear.setEnabled(False)
+        self.btn_start.setEnabled(False)
+        self.status_label.setText("正在扫描文件夹…")
+        worker = _ScanWorker(folder, self._scan_cancel)
+        worker.signals.scan_progress.connect(self._on_scan_progress)
+        worker.signals.scan_done.connect(self._on_scan_done)
+        self._pool.start(worker)
+
+    def _on_scan_progress(self, n: int) -> None:
+        self.status_label.setText(
+            f"正在扫描文件夹（已检查 {n} 个候选文件）…")
+
+    def _on_scan_done(self, payload: dict) -> None:
+        self._scanning = False
+        self.btn_add_files.setEnabled(True)
+        self.btn_add_folder.setText("添加文件夹…")
+        self.btn_add_folder.setEnabled(True)
+        self.btn_clear.setEnabled(True)
+        found = payload.get('files') or []
+        corrupt = payload.get('corrupt', 0)
+        if payload.get('error'):
+            self.status_label.setText(f"扫描失败: {payload['error']}")
+            return
+        if not found:
+            self.status_label.setText(
+                "该文件夹内没有可识别的加密音频"
+                + (f"（另有 {corrupt} 个 .ncm 文件头损坏，已忽略）"
+                   if corrupt else ""))
+        else:
             self._add(found)
+            if corrupt:
+                self.status_label.setText(
+                    f"共 {len(self._files)} 个待解锁文件"
+                    f"（另有 {corrupt} 个 .ncm 文件头损坏，已忽略）")
 
     def _on_clear(self) -> None:
-        if self._running or self._importing:
+        if self._running or self._importing or self._scanning:
             return
         self._files.clear()
         self._row_of.clear()
@@ -353,7 +417,8 @@ class UnlockDialog(QDialog):
 
     # ---------------- 执行 ----------------
     def _on_start(self) -> None:
-        if self._running or self._importing or not self._files:
+        if self._running or self._importing or self._scanning \
+                or not self._files:
             return
         out_dir = self._out_dir()
         if not out_dir:
@@ -421,13 +486,15 @@ class UnlockDialog(QDialog):
         self.btn_clear.setEnabled(True)
 
     def reject(self) -> None:
+        if self._scanning:
+            self._scan_cancel.set()
         if self._running:
             self._cancel.set()
             self.status_label.setText("正在取消…")
         if self._importing:
             self._cancel_import.set()
             self.status_label.setText("正在取消密钥导入…")
-        if self._running or self._importing:
+        if self._running or self._importing or self._scanning:
             # 必须等线程池排空：池销毁时仍有运行中的 QRunnable 会崩溃
             self._pool.waitForDone(-1)
         super().reject()

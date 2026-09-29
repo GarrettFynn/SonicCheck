@@ -748,16 +748,37 @@ def detect_encrypted_type(path) -> str:
     return ''
 
 
-def find_encrypted_files(folder: str) -> list:
-    """递归查找文件夹内可识别的加密音频（ncm/qmc 系），返回绝对路径列表"""
+def find_encrypted_files(folder: str, progress_cb=None,
+                         cancel_check=None) -> tuple:
+    """递归查找文件夹内可识别的加密音频（ncm/qmc 系）。
+
+    返回 (绝对路径列表, 疑似损坏的 .ncm 数)。
+
+    - 先按扩展名过滤再读文件头：万级普通曲库只对加密后缀文件做 open，
+      省 90%+ 的 IO（旧实现 rglob('*') 逐文件读 8 字节）
+    - 扩展名是 .ncm 但魔数不符的按"损坏"计数上报（旧实现静默跳过，
+      用户不知道文件被忽略）
+    - progress_cb(已检查候选数) 周期回调；cancel_check() 为 True 时
+      停止遍历并返回已发现部分（纯读操作，无需异常收尾）
+    """
     root = Path(folder)
     if not root.is_dir():
-        return []
-    out = []
+        return [], 0
+    out, corrupt = [], 0
+    scanned = 0
     for p in root.rglob('*'):
-        if p.is_file() and detect_encrypted_type(p):
+        if cancel_check is not None and cancel_check():
+            break
+        if not p.is_file() or p.suffix.lower() not in ENCRYPTED_EXTS:
+            continue
+        scanned += 1
+        if progress_cb is not None and scanned % 200 == 0:
+            progress_cb(scanned)
+        if detect_encrypted_type(p):
             out.append(str(p.resolve()))
-    return sorted(out, key=str.lower)
+        elif p.suffix.lower() == '.ncm':
+            corrupt += 1  # 有 .ncm 扩展名但文件头不符：损坏或伪装
+    return sorted(out, key=str.lower), corrupt
 
 
 def decrypt_bytes(data: bytes, enc_type: str, ekey_text: str = ''):
