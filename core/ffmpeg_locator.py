@@ -8,6 +8,7 @@
 3. Windows 常见安装位置（chocolatey / C:\\ffmpeg）
 """
 
+import functools
 import os
 import shutil
 import subprocess
@@ -43,8 +44,14 @@ def _bundled_candidates(name: str):
         yield Path(mei) / "resources" / "ffmpeg" / "bin" / exe
 
 
+@functools.lru_cache(maxsize=4)
 def find_tool(name: str) -> str:
-    """定位 ffmpeg/ffprobe，返回可执行文件绝对路径；找不到返回空字符串"""
+    """定位 ffmpeg/ffprobe，返回可执行文件绝对路径；找不到返回空字符串
+
+    结果按工具名缓存：每个文件的分析要探测两次（probe+转码），万级曲库
+    下不缓存会做两万次全 PATH 扫描。代价是运行中安装 ffmpeg 不会被感知，
+    重启程序即可。
+    """
     for cand in _bundled_candidates(name):
         if cand.is_file():
             return str(cand)

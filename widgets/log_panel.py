@@ -2,6 +2,7 @@
 # -*- coding: utf-8 -*-
 """可折叠日志面板（P1）"""
 
+import html
 from datetime import datetime
 
 from PyQt6.QtWidgets import QHBoxLayout, QPushButton, QTextEdit, QVBoxLayout, QWidget
@@ -44,11 +45,12 @@ class LogPanel(QWidget):
         self.btn_toggle.setText("▾ 日志" if checked else "▸ 日志")
 
     def log(self, message: str) -> None:
-        self.view.append(f"[{datetime.now():%H:%M:%S}] {message}")
+        # QTextEdit.append 按 HTML 富文本解释内容，ffmpeg stderr 等来源
+        # 里的 <...> 会被当标签吞掉，普通日志也必须转义（与 log_error 一致）
+        self.view.append(f"[{datetime.now():%H:%M:%S}] {html.escape(message)}")
 
     def log_error(self, message: str) -> None:
         """标红日志（重命名失败、目标冲突等，③-3）"""
-        import html
         self.view.append(
             f"[{datetime.now():%H:%M:%S}] "
             f'<span style="color:#F48771">{html.escape(message)}</span>')

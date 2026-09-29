@@ -9,7 +9,7 @@
 
 import threading
 
-from PyQt6.QtCore import QObject, QThreadPool, pyqtSignal
+from PyQt6.QtCore import QObject, Qt, QThreadPool, pyqtSignal
 
 from threads.scan_worker import ScanWorker
 
@@ -40,14 +40,27 @@ class ScanManager(QObject):
         self._settled = 0
         self._running = True
         self._pool.setMaxThreadCount(max(1, int(threads)))
+        if not files:
+            # 空列表：不会有任何 worker 回调触发结算，必须在此直接收尾，
+            # 否则 _running 悬挂为 True，UI 锁死在扫描态
+            self._running = False
+            self.log.emit("没有可扫描的文件")
+            self.scan_finished.emit(False)
+            return
         self.log.emit(
             f"开始扫描 {self._total} 首 | 线程数 {threads} | "
             f"每首分析前 {analyze_seconds} 秒")
         for fp in files:
             worker = ScanWorker(fp, analyze_seconds, self._cancel.is_set)
-            worker.signals.started.connect(self._on_started)
-            worker.signals.result.connect(self._on_result)
-            worker.signals.cancelled.connect(self._on_cancelled)
+            # 显式 QueuedConnection：worker 信号在池线程 emit，槽必须投递
+            # 到主线程执行。不依赖 auto connection 对 worker 构造线程的
+            # 隐性判断（若 worker 在非主线程构造，auto 会退化为直连）。
+            worker.signals.started.connect(
+                self._on_started, Qt.ConnectionType.QueuedConnection)
+            worker.signals.result.connect(
+                self._on_result, Qt.ConnectionType.QueuedConnection)
+            worker.signals.cancelled.connect(
+                self._on_cancelled, Qt.ConnectionType.QueuedConnection)
             self._pool.start(worker)
 
     def stop(self) -> None:
