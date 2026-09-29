@@ -300,7 +300,29 @@ def test_playlist_parsing_guards():
         sys.exit(1)
 
 
+def test_filename_safety():
+    """v1.2.0 文件名安全回归：Windows 保留名 / 超长截断"""
+    print("7. tag_renamer：保留名与超长截断")
+    sf = tag_renamer.sanitize_filename
+    check('保留名 CON', sf('CON') == 'CON_', sf('CON'))
+    check('保留名小写 com1', sf('com1') == 'com1_', sf('com1'))
+    check('保留名带点 NUL.txt', sf('NUL.txt') == 'NUL.txt_',
+          sf('NUL.txt'))
+    check('普通名不受影响', sf('晴天 - 周杰伦') == '晴天 - 周杰伦')
+    long_name = '超长歌名' * 60   # 240 字符
+    got = sf(long_name)
+    check('超长截断到 120', 0 < len(got) <= 120, str(len(got)))
+    check('截断后仍可用', bool(got.strip()))
+
+    failed = [n for n, ok in PASS if not ok]
+    print(f"  结果: {len(PASS)} 项中失败 {len(failed)} 项")
+    if failed:
+        print("失败项:", failed)
+        sys.exit(1)
+
+
 if __name__ == '__main__':
     main()
     test_dedup_false_positive_guards()
     test_playlist_parsing_guards()
+    test_filename_safety()

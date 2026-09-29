@@ -23,12 +23,31 @@ FMT_ARTIST_TITLE = "artist-title"   # 歌手-歌名
 
 _ILLEGAL = re.compile(r'[\\/:*?"<>|]')
 
+# C2：Windows 保留设备名（CON/NUL/COM1…），命中则整条路径创建失败
+_WIN_RESERVED = {'CON', 'PRN', 'AUX', 'NUL'} \
+    | {f'COM{i}' for i in range(1, 10)} | {f'LPT{i}' for i in range(1, 10)}
+# NTFS 名字分量上限 255；截到 120 给 " (n)" 撞名序号、扩展名与
+# 全路径其余部分留余量（超长 title+多歌手拼接曾直接把 mkstemp/ffmpeg 顶爆）
+_MAX_COMPONENT = 120
+
 
 def sanitize_filename(name: str) -> str:
-    """Windows 文件名净化：非法字符→空格，折叠空白，去尾部点/空格"""
+    """Windows 文件名净化：非法字符→空格，折叠空白，去尾部点/空格；
+    保留设备名加下划线；超长截断。
+
+    只用于文件名/目录名分量（扩展名由调用方拼接）。
+    """
     name = _ILLEGAL.sub(' ', name)
     name = re.sub(r'\s+', ' ', name).strip()
-    return name.rstrip('. ').strip()
+    name = name.rstrip('. ').strip()
+    if not name:
+        return ''
+    # 保留名带扩展名同样非法（CON.txt），按主干判定
+    if name.split('.')[0].strip().upper() in _WIN_RESERVED:
+        name += '_'
+    if len(name) > _MAX_COMPONENT:
+        name = name[:_MAX_COMPONENT].rstrip('. ').strip()
+    return name
 
 
 def build_tag_rename_plan(items: list, name_format: str = FMT_TITLE_ARTIST) -> tuple:
