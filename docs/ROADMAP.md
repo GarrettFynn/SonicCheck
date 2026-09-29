@@ -270,12 +270,17 @@ v2.0:   V20-1 Model/View ──→ V20-2 主窗口拆分(在表格稳定后动�
 5. `Compress-Archive` 出 zip → 校验关键文件（exe/ffmpeg×2/qss）在 zip 内
 6. 三远端推送 main + tag（**全新版本号 tag，永不复用历史名**）
 7. GitHub **草稿** Release → 上传 zip → 核对文案（对比链接用 URL 编码的 tag 名）→ 勾 Latest → 发布
-8. `docs/devlogs/DEV_LOG_v{版本}.md` + README 里程碑 + 提交推送
-9. 宣发素材（可选）：按 docs/marketing/ 既有流程出抖音文案/卡片
+8. DEV_LOG（`DEV_LOG_v{版本}.md`）写入 **internal 分支**（仅推 codehub）+ README 里程碑 + 提交推送
+9. 宣发素材（可选）：按 internal 分支 `docs/marketing/` 既有流程出抖音文案/卡片
 
 ---
 
 ## 5. 附：本文档维护规则
 
 - 每完成一个任务，把对应小节标题加 `[已完成 vX.Y.Z @ commit]` 标记；决策点拍板后把结论写进对应小节。
-- v2.0 发布后本文档归档至 `docs/devlogs/`，新路线图另起。
+- v2.0 发布后本文档归档（移至 internal 分支），新路线图另起。
+
+> **分支模型（2026-09-30 起）**：`main` = 公开产品仓（推全部三远端）；
+> `internal` = main + 内部物料（DEV_LOG/PROJECT_BIBLE/宣发素材/发布草稿，
+> **仅推 codehub origin**）。写内部文档时在 internal 分支提交；
+> main 侧完成新提交后 internal 需 `git merge main` 跟进。

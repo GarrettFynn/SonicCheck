@@ -150,7 +150,7 @@ SonicCheck/
 ├── resources/           # style.qss / icon.png / icon.ico / ffmpeg（打包前放入）
 ├── tests/               # 测试套件（python tests/run_all.py 一键运行）
 ├── dev/                 # 各里程碑测试与基准脚本（沙盒副本上进行，不动 samples 原件）
-├── docs/                # 技术说明 / 宣发物料 / 发布说明 / 开发日志
+├── docs/                # 技术说明 / 发布说明
 ├── requirements.txt     # Python 依赖
 ├── build.bat            # 一键打包脚本（PyInstaller 命令行参数即全部配置）
 ├── BUILDING.md          # 打包说明
