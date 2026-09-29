@@ -66,8 +66,12 @@ def _dpapi_crypt(data: bytes, protect: bool) -> bytes:
         kernel32.LocalFree(blob_out.pbData)
 
 
-def _encrypt_cookie(cookie: str) -> str:
-    """cookie → 落盘字符串（DPAPI 可用则加密，否则明文原样）"""
+def _encrypt_cookie(cookie: str):
+    """cookie → 落盘字符串。DPAPI 可用返回 'dpapi:...' 前缀密文。
+
+    加密失败返回 None：cookie 等价于账号登录凭据，宁可不入库也绝不明文
+    落盘（B3：旧实现此处静默返回原文，DPAPI 不可用时登录态会被明文
+    写进 ~/.soniccheck/ 且用户毫不知情）。"""
     if not cookie:
         return ''
     try:
@@ -75,7 +79,7 @@ def _encrypt_cookie(cookie: str) -> str:
         enc = _dpapi_crypt(cookie.encode('utf-8'), protect=True)
         return _DPAPI_PREFIX + base64.b64encode(enc).decode('ascii')
     except OSError:
-        return cookie
+        return None
 
 
 def _decrypt_cookie(stored: str) -> str:
@@ -171,6 +175,8 @@ class EkeyStore:
         self._ekeys: dict = {}
         self._cookie = ''
         self._uin = ''
+        self.cookie_dropped = False  # 最近一次 save 因无法加密而未入库 cookie
+        self.save_failed = False     # 最近一次 save 写盘失败
         self._load()
 
     def _load(self) -> None:
@@ -182,7 +188,15 @@ class EkeyStore:
         except (OSError, ValueError):
             pass
 
-    def save(self) -> None:
+    def save(self) -> bool:
+        """合并落盘（并发安全），返回写盘是否成功。
+
+        - 磁盘键先并入再写（read-modify-write 收敛），并行实例互不覆盖
+        - cookie 加密失败（DPAPI 不可用）时整段不入库，置 cookie_dropped
+          供调用方提示"登录态仅本次有效"；绝不明文落盘
+        - 写盘失败置 save_failed 并返回 False，不再静默吞掉（旧实现
+          except OSError: pass 会让"密钥已缓存"的假象在重启后落空）
+        """
         with self._IO_LOCK:
             # 合并落盘：磁盘上的键（可能是其他实例刚写入的）先并入，
             # 本实例新增的键优先，避免 last-writer-wins 覆盖丢数据
@@ -193,18 +207,23 @@ class EkeyStore:
                 merged = {}
             merged.update(self._ekeys)
             self._ekeys = merged
+            cookie_field = _encrypt_cookie(self._cookie)
+            self.cookie_dropped = (cookie_field is None
+                                   and bool(self._cookie))
+            payload = {'ekeys': self._ekeys, 'uin': self._uin}
+            if cookie_field is not None:
+                payload['cookie'] = cookie_field
             try:
                 self.path.parent.mkdir(parents=True, exist_ok=True)
                 tmp = self.path.with_suffix('.tmp')
-                tmp.write_text(json.dumps({
-                    'ekeys': self._ekeys,
-                    # cookie 是登录态：Windows 下 DPAPI 加密落盘，防明文泄露
-                    'cookie': _encrypt_cookie(self._cookie),
-                    'uin': self._uin,
-                }, ensure_ascii=False, indent=1), encoding='utf-8')
+                tmp.write_text(json.dumps(payload, ensure_ascii=False,
+                                          indent=1), encoding='utf-8')
                 tmp.replace(self.path)
+                self.save_failed = False
+                return True
             except OSError:
-                pass
+                self.save_failed = True
+                return False
 
     # ── ekey ──
     @staticmethod
@@ -244,6 +263,27 @@ class EkeyStore:
 # 从运行中的 QQMusic.exe 提取登录 cookie（Win32 只读内存扫描）
 # ══════════════════════════════════════════════════════════════════
 
+def _cookie_from_chunk(buf, length: int):
+    """在已读缓冲（c_char 数组，有效长度 length）里找登录 cookie。
+
+    返回 {'cookie','uin'} 或 None。用 buf.raw 零拷贝视图查找，替代旧的
+    bytes(buf[:n]) 整块复制（50MB 窗口时省一次全量拷贝）。"""
+    raw = buf.raw
+    pos = raw.find(_COOKIE_MARKER, 0, length)
+    if pos < 0:
+        return None
+    seg = raw[pos:min(pos + 512, length)]
+    cookie = seg.split(b'\x00')[0].decode('utf-8', errors='ignore').strip()
+    for sep in ('\n', '\r'):
+        if sep in cookie:
+            cookie = cookie.split(sep)[0]
+    import re
+    m = re.search(r'qqmusic_uin=(\d+)', cookie)
+    if m:
+        return {'cookie': cookie, 'uin': m.group(1)}
+    return None
+
+
 def extract_cookie_from_process() -> dict:
     """扫描 QQMusic.exe 进程内存提取 cookie。
     返回 {'ok': bool, 'cookie': str, 'uin': str, 'error': str}"""
@@ -251,20 +291,41 @@ def extract_cookie_from_process() -> dict:
         return {'ok': False, 'error': '仅支持 Windows 平台'}
 
     import ctypes
-    import ctypes.wintypes
+    import ctypes.wintypes as wt
 
     kernel32 = ctypes.windll.kernel32
     psapi = ctypes.windll.psapi
+
+    # B3：显式声明签名。不声明时 ctypes 默认 restype=c_int，64 位进程上
+    # HANDLE 是 64 位值，高位被截断属于依赖未文档化行为的隐患
+    kernel32.OpenProcess.argtypes = [wt.DWORD, wt.BOOL, wt.DWORD]
+    kernel32.OpenProcess.restype = wt.HANDLE
+    kernel32.CloseHandle.argtypes = [wt.HANDLE]
+    kernel32.CloseHandle.restype = wt.BOOL
+    kernel32.VirtualQueryEx.argtypes = [wt.HANDLE, wt.LPCVOID,
+                                        wt.LPCVOID, ctypes.c_size_t]
+    kernel32.VirtualQueryEx.restype = ctypes.c_size_t
+    kernel32.ReadProcessMemory.argtypes = [wt.HANDLE, wt.LPCVOID, wt.LPVOID,
+                                           ctypes.c_size_t,
+                                           ctypes.POINTER(ctypes.c_size_t)]
+    kernel32.ReadProcessMemory.restype = wt.BOOL
+    psapi.EnumProcesses.argtypes = [ctypes.POINTER(wt.DWORD), wt.DWORD,
+                                    ctypes.POINTER(wt.DWORD)]
+    psapi.EnumProcesses.restype = wt.BOOL
+    psapi.GetModuleBaseNameA.argtypes = [wt.HANDLE, wt.HMODULE,
+                                         wt.LPSTR, wt.DWORD]
+    psapi.GetModuleBaseNameA.restype = wt.DWORD
 
     PROCESS_VM_READ = 0x0010
     PROCESS_QUERY_INFORMATION = 0x0400
     MAX_PATH = 260
 
-    enum_buf = (ctypes.wintypes.DWORD * 4096)()
-    cb_needed = ctypes.wintypes.DWORD()
-    psapi.EnumProcesses(ctypes.byref(enum_buf), ctypes.sizeof(enum_buf),
+    enum_buf = (wt.DWORD * 4096)()
+    cb_needed = wt.DWORD()
+    # 数组实参直接传（argtype=POINTER(DWORD) 时 byref(数组) 反而不被接受）
+    psapi.EnumProcesses(enum_buf, ctypes.sizeof(enum_buf),
                         ctypes.byref(cb_needed))
-    num_procs = cb_needed.value // ctypes.sizeof(ctypes.wintypes.DWORD)
+    num_procs = cb_needed.value // ctypes.sizeof(wt.DWORD)
     pid = None
     for i in range(num_procs):
         candidate = enum_buf[i]
@@ -298,18 +359,21 @@ def extract_cookie_from_process() -> dict:
             _fields_ = [
                 ('BaseAddress', ctypes.c_void_p),
                 ('AllocationBase', ctypes.c_void_p),
-                ('AllocationProtect', ctypes.wintypes.DWORD),
+                ('AllocationProtect', wt.DWORD),
                 ('RegionSize', ctypes.c_size_t),
-                ('State', ctypes.wintypes.DWORD),
-                ('Protect', ctypes.wintypes.DWORD),
-                ('Type', ctypes.wintypes.DWORD),
+                ('State', wt.DWORD),
+                ('Protect', wt.DWORD),
+                ('Type', wt.DWORD),
             ]
 
         MEM_COMMIT = 0x1000
         READABLE = {0x02, 0x04, 0x06, 0x20, 0x40, 0x60, 0x80}
+        CHUNK = 64 * 1024 * 1024   # 大区域分窗读取粒度
+        OVERLAP = 1024             # 窗口重叠：标记/凭据跨窗边界时不漏检
         mbi = MBI()
         addr = 0
         bytes_read = ctypes.c_size_t()
+        buf = None
         while addr < 0x7FFFFFFFFFFFFFFF:
             if kernel32.VirtualQueryEx(h_proc, ctypes.c_void_p(addr),
                                        ctypes.byref(mbi),
@@ -320,25 +384,23 @@ def extract_cookie_from_process() -> dict:
             if region_size == 0:
                 break
             if (mbi.State == MEM_COMMIT and mbi.Protect in READABLE
-                    and 0x1000 <= region_size <= 50 * 1024 * 1024):
-                buf = (ctypes.c_char * region_size)()
-                if kernel32.ReadProcessMemory(
-                        h_proc, ctypes.c_void_p(base_addr), buf,
-                        region_size, ctypes.byref(bytes_read)):
-                    data = bytes(buf[:bytes_read.value])
-                    pos = data.find(_COOKIE_MARKER)
-                    if pos >= 0:
-                        raw = data[pos:pos + 512].split(b'\x00')[0] \
-                            .decode('utf-8', errors='ignore')
-                        cookie = raw.strip()
-                        for sep in ('\n', '\r'):
-                            if sep in cookie:
-                                cookie = cookie.split(sep)[0]
-                        import re
-                        m = re.search(r'qqmusic_uin=(\d+)', cookie)
-                        if m:
-                            return {'ok': True, 'cookie': cookie,
-                                    'uin': m.group(1), 'error': ''}
+                    and region_size >= 0x1000):
+                # B3：不再设 50MB 区域上限——QQ 音乐是 CEF/Electron 系
+                # 客户端，cookie 常落在数百 MB 的 V8 大堆里，旧上限会
+                # 直接跳过导致偶发"未找到登录信息"；大区域分窗读取
+                if buf is None or len(buf) < CHUNK + OVERLAP:
+                    buf = (ctypes.c_char * (CHUNK + OVERLAP))()
+                for w_off in range(0, region_size, CHUNK):
+                    want = min(CHUNK + OVERLAP, region_size - w_off)
+                    if kernel32.ReadProcessMemory(
+                            h_proc, ctypes.c_void_p(base_addr + w_off),
+                            buf, want, ctypes.byref(bytes_read)):
+                        got = bytes_read.value
+                        if got > 0:
+                            found = _cookie_from_chunk(buf, got)
+                            if found:
+                                return {'ok': True, 'error': '',
+                                        **found}
             nxt = base_addr + region_size
             if nxt <= addr:
                 break
@@ -566,5 +628,9 @@ def ensure_ekeys(paths, store: 'EkeyStore | None' = None,
                 idx = 0
 
     result['cancelled'] = cancelled
-    store.save()
+    ok_save = store.save()
+    # 保存状态供 UI 提示（B3）：写盘失败/登录态无法加密不再静默
+    result['save_error'] = '' if ok_save else (
+        '密钥库写入失败（磁盘或权限问题），已获取的密钥仅在本批次有效')
+    result['cookie_dropped'] = bool(store.cookie_dropped)
     return result

@@ -257,6 +257,16 @@ class UnlockDialog(QDialog):
 
         cached, fetched = result.get('cached', 0), result.get('fetched', 0)
         failed = result.get('failed', [])
+        # B3：保存异常不再静默——登录态无法加密（仅本次有效）/ 写盘失败
+        if result.get('cookie_dropped'):
+            QMessageBox.warning(
+                self, "登录态未能加密保存",
+                "本机 DPAPI 不可用，QQ 音乐登录态未写入本机密钥库"
+                "（解密密钥本身已正常保存）。\n\n本次解锁不受影响；"
+                "重启程序后若需再次导入密钥，重新打开 QQ 音乐客户端即可。")
+        if result.get('save_error'):
+            QMessageBox.warning(self, "密钥库写入失败",
+                                result['save_error'])
         if result.get('cancelled'):
             self.status_label.setText(
                 f"密钥导入已取消：已获取 {fetched} 首（已落盘），"
