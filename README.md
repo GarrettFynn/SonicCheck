@@ -145,8 +145,7 @@ SonicCheck/
 ├── resources/           # style.qss / icon.png / icon.ico / ffmpeg（打包前放入）
 ├── dev/                 # 各里程碑测试（沙盒副本上进行，不动 samples 原件）
 ├── requirements.txt     # Python 依赖
-├── build.spec           # PyInstaller 打包配置
-├── build.bat            # 一键打包脚本
+├── build.bat            # 一键打包脚本（PyInstaller 命令行参数即全部配置）
 ├── BUILDING.md          # 打包说明
 ├── LICENSE              # GPL v3 许可证
 └── README.md            # 本文件
