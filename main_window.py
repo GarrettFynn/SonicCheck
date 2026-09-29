@@ -521,7 +521,11 @@ class MainWindow(QMainWindow):
         if dialog.exec() != RenameDialog.DialogCode.Accepted:
             self.log_panel.log("重命名已取消，未执行任何操作")
             return
+        self._run_rename_plan(plan, "重命名")
 
+    def _run_rename_plan(self, plan: list, action_name: str) -> None:
+        """执行改名计划：安全模式重定向到安全输出目录复制，逐条日志
+        并同步表格（一键重命名与标签改名两条流程共用，C3 收敛）"""
         if self.safe_mode_on:
             for op in plan:  # 产出重定向：复制到安全输出目录，原文件不动
                 op.new_path = self._safe_map(op.new_path)
@@ -540,9 +544,11 @@ class MainWindow(QMainWindow):
                 if op.kind == KIND_AUDIO:
                     self._on_audio_renamed(op.old_path, op.new_path)
             else:
-                self.log_panel.log_error(f"重命名失败: {old_name} ← {err}")
+                self.log_panel.log_error(
+                    f"{action_name}失败: {old_name} ← {err}")
         self.log_panel.log(
-            f"重命名完成: 成功 {ok_cnt} 个，失败 {len(results) - ok_cnt} 个")
+            f"{action_name}完成: 成功 {ok_cnt} 个，"
+            f"失败 {len(results) - ok_cnt} 个")
 
     def _on_audio_renamed(self, old_path: str, new_path: str) -> None:
         """音频改名后同步内存结果与表格行（歌词改名无需同步）"""
@@ -692,28 +698,7 @@ class MainWindow(QMainWindow):
         if dialog.exec() != RenameDialog.DialogCode.Accepted:
             self.log_panel.log("标签改名已取消，未执行任何操作")
             return
-
-        if self.safe_mode_on:
-            for op in plan:  # 产出重定向：复制到安全输出目录，原文件不动
-                op.new_path = self._safe_map(op.new_path)
-            results = execute_copy_plan(plan)
-            self.log_panel.log(
-                f"安全模式：原件未动，改名件复制到 {self._safe_root()}")
-        else:
-            results = execute_plan(plan)
-        ok_cnt = 0
-        for op, ok2, err in results:
-            old_name = Path(op.old_path).name
-            if ok2:
-                ok_cnt += 1
-                self.log_panel.log(
-                    f"{old_name} → {Path(op.new_path).name}")
-                if op.kind == KIND_AUDIO:
-                    self._on_audio_renamed(op.old_path, op.new_path)
-            else:
-                self.log_panel.log_error(f"改名失败: {old_name} ← {err}")
-        self.log_panel.log(
-            f"标签改名完成: 成功 {ok_cnt} 个，失败 {len(results) - ok_cnt} 个")
+        self._run_rename_plan(plan, "标签改名")
 
     def on_playlist(self) -> None:
         """功能 E：歌单匹配复制到新文件夹"""

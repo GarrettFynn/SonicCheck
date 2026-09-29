@@ -19,6 +19,7 @@ import urllib.request
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from core.fsutil import companion_lrc
 from core.renamer import strip_quality_suffix
 from core.tag_renamer import sanitize_filename
 from models.result_item import STATUS_DONE
@@ -312,8 +313,8 @@ def copy_matched(matched: list, target_root: str, playlist_name: str) -> tuple:
     for _entry, item in matched:
         src = Path(item.filepath)
         candidates = [src]
-        lrc = src.parent / (src.stem + ".lrc")
-        if lrc.is_file():
+        lrc = companion_lrc(src)
+        if lrc is not None:
             candidates.append(lrc)
         for f in candidates:
             dst = dest_dir / f.name

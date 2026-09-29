@@ -13,6 +13,7 @@
 import re
 from pathlib import Path
 
+from core.fsutil import companion_lrc
 from core.quality_marks import apply_mark
 from core.renamer import (KIND_AUDIO, KIND_LRC, RenameOp, RenameSkip,
                           execute_plan, strip_quality_suffix)
@@ -98,8 +99,8 @@ def build_tag_rename_plan(items: list, name_format: str = FMT_TITLE_ARTIST) -> t
                              "标签改名"))
 
         # .lrc 跟随音频一起改
-        lrc_old = old.parent / (old.stem + ".lrc")
-        if lrc_old.is_file():
+        lrc_old = companion_lrc(old)
+        if lrc_old is not None:
             lrc_new = old.parent / (new_stem + ".lrc")
             lrc_key = str(lrc_new).lower()
             if lrc_new.exists() or lrc_key in planned_targets:

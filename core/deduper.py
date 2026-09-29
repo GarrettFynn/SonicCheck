@@ -21,11 +21,13 @@
 可恢复；同 stem 的 .lrc 一并移动；目标撞名自动加 (n) 序号。
 """
 
+import json
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from core.renamer import strip_quality_suffix
+from core.fsutil import companion_lrc
+from core.renamer import execute_ops, strip_quality_suffix
 from models.result_item import STATUS_DONE
 
 CLEAR_DIR_NAME = "_待清除"
@@ -183,8 +185,8 @@ def build_clear_plan(groups: list, target_root: str) -> tuple:
         for item in g.clear:
             old = Path(item.filepath)
             candidates = [(old, 'audio')]
-            lrc_old = old.parent / (old.stem + ".lrc")
-            if lrc_old.is_file():
+            lrc_old = companion_lrc(old)
+            if lrc_old is not None:
                 candidates.append((lrc_old, 'lrc'))
             for src, kind in candidates:
                 dst = clear_dir / src.name
@@ -201,24 +203,20 @@ def build_clear_plan(groups: list, target_root: str) -> tuple:
 def execute_move_plan(plan: list) -> list:
     """执行移动，返回 [(op, ok, error)]；单条失败不中断整批"""
     moved_dirs = set()
-    results = []
-    for op in plan:
-        try:
-            dst_dir = str(Path(op.new_path).parent)
-            if dst_dir not in moved_dirs:
-                os.makedirs(dst_dir, exist_ok=True)
-                moved_dirs.add(dst_dir)
-            os.rename(op.old_path, op.new_path)
-            results.append((op, True, ""))
-        except OSError as exc:
-            results.append((op, False, str(exc)))
-    return results
+
+    def _move(old: Path, new: Path) -> None:
+        d = str(new.parent)
+        if d not in moved_dirs:  # 目标目录只建一次
+            os.makedirs(d, exist_ok=True)
+            moved_dirs.add(d)
+        os.rename(old, new)
+
+    return execute_ops(plan, _move)
 
 
 # ---------------- 去重还原（_待清除 → 移回原位） ----------------
 def record_restore_map(clear_dir: str, moved: list) -> None:
     """把本次成功移动的 new→old 映射合并写入 manifest（供还原用）"""
-    import json
     manifest = Path(clear_dir) / RESTORE_MANIFEST
     data = {}
     if manifest.is_file():
@@ -234,7 +232,6 @@ def record_restore_map(clear_dir: str, moved: list) -> None:
 
 def load_restore_map(clear_dir: str) -> dict:
     """读取 manifest（不存在/损坏返回空 dict）"""
-    import json
     manifest = Path(clear_dir) / RESTORE_MANIFEST
     if not manifest.is_file():
         return {}
@@ -250,7 +247,6 @@ def build_restore_plan(clear_dir: str) -> tuple:
     返回 (plan, skipped)：skipped 为 (path, 原因)——源已不在（已还原过）
     或原位置已被占用的项；同时清理 manifest 中源已不在的死条目。
     """
-    import json
     mapping = load_restore_map(clear_dir)
     plan: list = []
     skipped: list = []
@@ -284,7 +280,6 @@ def build_restore_plan(clear_dir: str) -> tuple:
 
 def prune_restore_map(clear_dir: str, restored_new_paths: list) -> None:
     """还原成功后从 manifest 移除对应条目；全空则删 manifest"""
-    import json
     mapping = load_restore_map(clear_dir)
     for p in restored_new_paths:
         mapping.pop(p, None)

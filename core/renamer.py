@@ -17,13 +17,9 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
-from core.quality_marks import (DEFAULT_MARK_FAKE, DEFAULT_MARK_TRUE,
-                                apply_mark, mark_for, strip_quality_mark)
+from core.fsutil import companion_lrc
+from core.quality_marks import (apply_mark, mark_for, strip_quality_mark)
 from models.result_item import STATUS_DONE, ResultItem
-
-SUFFIX_TRUE = DEFAULT_MARK_TRUE   # 兼容旧引用；新逻辑用 quality_marks.mark_for
-SUFFIX_FAKE = DEFAULT_MARK_FAKE
-QUALITY_SUFFIXES = (SUFFIX_TRUE, SUFFIX_FAKE)
 
 KIND_AUDIO = "audio"
 KIND_LRC = "lrc"
@@ -69,8 +65,8 @@ def build_rename_plan(items: list) -> tuple:
         old = Path(item.filepath)
         new_stem = apply_mark(strip_quality_suffix(old.stem), item.is_fake)
         candidates = [(old, KIND_AUDIO)]
-        lrc_old = old.parent / (old.stem + ".lrc")
-        if lrc_old.is_file():
+        lrc_old = companion_lrc(old)
+        if lrc_old is not None:
             candidates.append((lrc_old, KIND_LRC))
 
         for old_path, kind in candidates:
@@ -89,16 +85,25 @@ def build_rename_plan(items: list) -> tuple:
     return plan, skipped
 
 
-def execute_plan(plan: list) -> list:
-    """执行重命名，返回 [(op, ok, error)]；单条失败不中断整批"""
+def execute_ops(plan: list, action) -> list:
+    """通用计划执行器：action(old: Path, new: Path) 完成单条文件操作。
+
+    统一返回 [(op, ok, error)]，单条 OSError 失败不中断整批——
+    重命名/安全复制/去重移动三个执行器曾为三份同构拷贝（C3 收敛）。
+    """
     results = []
     for op in plan:
         try:
-            os.rename(op.old_path, op.new_path)
+            action(Path(op.old_path), Path(op.new_path))
             results.append((op, True, ""))
         except OSError as exc:
             results.append((op, False, str(exc)))
     return results
+
+
+def execute_plan(plan: list) -> list:
+    """执行重命名，返回 [(op, ok, error)]；单条失败不中断整批"""
+    return execute_ops(plan, lambda old, new: os.rename(old, new))
 
 
 def execute_copy_plan(plan: list) -> list:
@@ -107,15 +112,11 @@ def execute_copy_plan(plan: list) -> list:
     目标已存在则该条失败（不覆盖，防止安全输出目录里的旧件被误毁）。
     """
     import shutil
-    results = []
-    for op in plan:
-        try:
-            dst = Path(op.new_path)
-            if dst.exists():
-                raise FileExistsError(f"目标已存在: {dst.name}")
-            dst.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(op.old_path, op.new_path)
-            results.append((op, True, ""))
-        except OSError as exc:
-            results.append((op, False, str(exc)))
-    return results
+
+    def _copy(old: Path, new: Path) -> None:
+        if new.exists():
+            raise FileExistsError(f"目标已存在: {new.name}")
+        new.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(old, new)
+
+    return execute_ops(plan, _copy)
