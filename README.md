@@ -120,6 +120,8 @@ python main.py
 - [x] M4.5 二期功能批：详情 / 同名对比 / 去重清除 / 标签改名 / 歌单导入 / 网易云链接全量解析
 - [x] M4.6 增强批：自定义质量标记、多选与筛选导出、去重还原、安全模式、使用指南、改名 SonicCheck
 - [x] M5 打包材料：`build.spec` + `build.bat` + BUILDING.md（用户本机执行）
+- [x] M6 v1.1.1 工程地基：测试入库、GitHub Actions CI、去重误报加固（宁漏勿错）、线程/日志快速加固
+- [x] M7 v1.2.0 性能与打磨：表格批量渲染、并行解锁、QQ 密钥安全加固、网易云/解锁窗口后台化、歌单解析三修、文件名安全
 
 ---
 
@@ -139,11 +141,16 @@ SonicCheck/
 │   ├── tag_renamer.py   # 标签改名
 │   ├── csv_exporter.py  # CSV 导出
 │   ├── quality_marks.py # 质量标记配置
+│   ├── unlock.py        # 加密格式解锁（NCM/QMC 流式解密）
+│   ├── qqmusic_key.py   # QQ 音乐密钥获取与本地密钥库
+│   ├── fsutil.py        # 文件系统小工具（lrc 伴随文件等）
 │   └── ffmpeg_locator.py# ffmpeg 自动查找
 ├── models/              # ResultItem 数据模型
 ├── threads/             # ScanWorker / ScanManager（QThreadPool 调度）
 ├── resources/           # style.qss / icon.png / icon.ico / ffmpeg（打包前放入）
-├── dev/                 # 各里程碑测试（沙盒副本上进行，不动 samples 原件）
+├── tests/               # 测试套件（python tests/run_all.py 一键运行）
+├── dev/                 # 各里程碑测试与基准脚本（沙盒副本上进行，不动 samples 原件）
+├── docs/                # 技术说明 / 宣发物料 / 发布说明 / 开发日志
 ├── requirements.txt     # Python 依赖
 ├── build.bat            # 一键打包脚本（PyInstaller 命令行参数即全部配置）
 ├── BUILDING.md          # 打包说明
