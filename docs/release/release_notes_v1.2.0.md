@@ -58,4 +58,9 @@
 
 **从 v1.1.0 升级**：直接覆盖解压，配置自动保留。
 
-**完整变更**：见 [提交历史](https://github.com/GarrettFynn/SonicCheck/compare/v1.1.0...v1.2.0)（22 个提交）。
+**完整变更**：见 [提交历史](https://github.com/GarrettFynn/SonicCheck/compare/v1.1.0...v1.2.0%2B1)（24 个提交）。
+
+> 注：GitHub 的 Release tag 为 `v1.2.0+1`（semver 构建元数据，表示 v1.2.0
+> 的第 1 次重打包）——`v1.2.0` 这个 tag 名曾被 GitHub"不可变 release"机制
+> 短暂占用过一次且不可复用（供应链安全特性，删除后名字永久保留），
+> 软件版本号本身仍是 v1.2.0。gitee/华为云镜像的 tag 为正常的 `v1.2.0`。
