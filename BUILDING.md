@@ -5,12 +5,16 @@ SonicCheck 使用 PyInstaller 打包为 Windows onedir 绿色版：`dist\SonicCh
 ## 前置条件
 
 ```bash
-pip install -r requirements.txt
-pip install pyinstaller
+pip install -r requirements.txt -r requirements-dev.txt
 ```
 
 - Python ≥ 3.10（开发用 3.11/3.12 均验证过）
 - `resources/ffmpeg/` 下已放置 `ffmpeg.exe` 与 `ffprobe.exe`（随包分发）
+
+## 依赖快照（发版用）
+
+发布前执行 `pip freeze > requirements-freeze.txt` 并入库，锁定当次
+绿色版的完整依赖版本，保证打包可复现；平时开发不要手工编辑该文件。
 
 ## 一键打包
 

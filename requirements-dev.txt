@@ -1,0 +1,3 @@
+# 开发/打包/测试阶段的额外依赖（最终用户运行不需要）
+# 用法：pip install -r requirements.txt -r requirements-dev.txt
+pyinstaller>=6.0.0
