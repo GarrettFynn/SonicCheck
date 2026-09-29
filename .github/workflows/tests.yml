@@ -9,6 +9,10 @@ jobs:
   test:
     # 与发布目标平台一致，避免路径分隔符 / 子进程行为差异造成误报
     runs-on: windows-latest
+    env:
+      # 英文 Windows 镜像控制台为 cp1252，测试输出的 ▶/✓/中文会
+      # UnicodeEncodeError（run_all.py 内也做了同样兜底，双保险）
+      PYTHONIOENCODING: utf-8
     steps:
       - uses: actions/checkout@v4
 

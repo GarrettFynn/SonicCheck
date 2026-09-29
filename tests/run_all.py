@@ -6,9 +6,16 @@
 任何套件失败则整体退出码非零，供发版前自检/CI 使用。
 """
 
+import os
 import subprocess
 import sys
 from pathlib import Path
+
+# CI（英文 Windows 镜像）控制台是 cp1252，▶/✓/中文输出直接
+# UnicodeEncodeError——统一重配为 UTF-8，并给子进程注入同样编码
+for _stream in (sys.stdout, sys.stderr):
+    _stream.reconfigure(encoding='utf-8', errors='replace')
+_CHILD_ENV = {**os.environ, 'PYTHONIOENCODING': 'utf-8'}
 
 
 def main() -> int:
@@ -21,7 +28,8 @@ def main() -> int:
     failed = []
     for suite in suites:
         print(f"\n{'=' * 64}\n▶ {suite.name}\n{'=' * 64}", flush=True)
-        r = subprocess.run([sys.executable, str(suite)], cwd=str(here))
+        r = subprocess.run([sys.executable, str(suite)], cwd=str(here),
+                           env=_CHILD_ENV)
         if r.returncode != 0:
             failed.append(suite.name)
 
