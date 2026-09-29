@@ -7,6 +7,7 @@
 强制 FLAC/WAV 时对无损内层是无损重封装，对有损内层只是换容器。
 """
 
+import logging
 import os
 import threading
 from pathlib import Path
@@ -25,6 +26,8 @@ from core.unlock import (ENCRYPTED_EXTS, UnlockCancelled,
 from widgets.qqmusic_guide_dialog import QQMusicGuideDialog
 
 _FMT_TAG = {'ncm': 'NCM', 'qmc': 'QMC'}
+
+logger = logging.getLogger(__name__)
 
 
 class _WorkerSignals(QObject):
@@ -54,6 +57,7 @@ class _ScanWorker(QRunnable):
                 cancel_check=self.cancel.is_set)
             self.signals.scan_done.emit({'files': files, 'corrupt': corrupt})
         except Exception as exc:  # 保底：扫描异常也走正常收尾
+            logger.exception("文件夹扫描异常: %s", self.folder)
             self.signals.scan_done.emit({'files': [], 'corrupt': 0,
                                          'error': str(exc)})
 
@@ -88,6 +92,7 @@ class _UnlockWorker(QRunnable):
                 self.signals.finished.emit(True)
                 return
             except Exception as exc:  # 单文件异常不中断整批
+                logger.exception("解锁失败: %s", fp)  # C4：留 traceback 供排障
                 from core.unlock import UnlockResult
                 result = UnlockResult(ok=False, src=fp, message=str(exc))
             self.signals.file_done.emit(idx, result)
@@ -110,6 +115,7 @@ class _KeyImportWorker(QRunnable):
                 progress=lambda i, t, n: self.signals.progress.emit(i, t, n),
                 cancel_check=self.cancel.is_set)
         except Exception as exc:  # 保底：任何异常都转成用户可读结果
+            logger.exception("密钥导入异常")
             result = {'total': 0, 'cached': 0, 'fetched': 0,
                       'failed': [(f, str(exc)) for f in self.files],
                       'auth_ok': False, 'cancelled': False}

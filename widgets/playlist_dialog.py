@@ -12,6 +12,7 @@
 带进度显示与取消。
 """
 
+import logging
 import threading
 
 from PyQt6.QtCore import QObject, QRunnable, QThreadPool, pyqtSignal
@@ -21,6 +22,8 @@ from PyQt6.QtWidgets import (QDialog, QDialogButtonBox, QFileDialog,
 
 from core.playlist import (fetch_netease_playlist, match_entries,
                            parse_playlist_file, parse_playlist_text)
+
+logger = logging.getLogger(__name__)
 
 
 class _FetchSignals(QObject):
@@ -47,6 +50,7 @@ class _FetchWorker(QRunnable):
         except RuntimeError as exc:
             self.signals.done.emit({'ok': False, 'error': str(exc)})
         except Exception as exc:  # 保底：网络栈的意外异常也转成可读错误
+            logger.exception("网易云歌单解析异常")
             self.signals.done.emit({'ok': False, 'error': f'解析失败: {exc}'})
 
 

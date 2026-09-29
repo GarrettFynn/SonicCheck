@@ -25,8 +25,11 @@ PASS = []
 
 
 def check(name, cond, extra=""):
-    PASS.append((name, bool(cond)))
+    cond = bool(cond)
+    PASS.append((name, cond))
     print(f"  {'✓' if cond else '✗'} {name} {extra}")
+    # assert 化（C4）：失败立即带栈中断而非跑完打印汇总，CI 可见出错点
+    assert cond, f"{name} {extra}"
 
 
 def make_item(folder: Path, name: str, score=80.0, is_fake=False,
