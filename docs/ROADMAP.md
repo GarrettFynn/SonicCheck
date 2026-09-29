@@ -2,7 +2,7 @@
 
 > **性质**：三段版本的实施任务书（做什么/怎么改/怎么验收）+ 计划书（批次/顺序/依赖/风险）。
 > **基线**：v1.2.0+1（main @ f018815，CI 全绿，128 项测试断言）。
-> **使用方式**：每开一个新版本，从本文档对应章节取任务清单执行；执行者按 §5 发版清单收尾。
+> **使用方式**：每开一个新版本，从本文档对应章节取任务清单执行；执行者按 §4.4 发版清单收尾。
 > **撰写日期**：2026-09-30。
 
 ---
@@ -81,9 +81,9 @@
 2. 列宽、排序列/方向存 QSettings，启动恢复。
 3. 右键菜单加两项："只看此歌手"、"只看此格式"（取右键行的标签/扩展名，设置到新搜索框）。
 
-**实现要点**：过滤逻辑集中在 `ResultTable.apply_filter()` 扩展（组合条件函数）；列宽用 `header.saveState()/restoreState()`（QByteArray 直接进 QSettings）。
+**实现要点**：过滤逻辑集中在 `ResultTable.apply_filter()` 扩展（组合条件函数；v1.3.0 仍是 QTableWidget 的手工遍历——`setRowHidden` 逐行设置，Model/View 代理过滤要等 V20-1）；搜索框输入加 **300ms QTimer 防抖**（每击键全表遍历 1 万行约百毫秒级，连续输入会叠卡）；列宽用 `header.saveState()/restoreState()`（QByteArray 直接进 QSettings）。
 
-**验收**：搜索"周杰伦" + "只看假无损"叠加生效；重启后列宽排序保持；全表 1 万行下输入搜索无明显卡顿（代理过滤是 O(n) 遍历 setRowHidden，实测 <100ms）。
+**验收**：搜索"周杰伦" + "只看假无损"叠加生效；重启后列宽排序保持；全表 1 万行下连续输入搜索无可感卡顿（防抖后单次全表遍历 <100ms）。
 
 ### V13-4 最近文件夹列表【S】
 
@@ -105,7 +105,7 @@
 
 ### V13-6 批收尾与发版【S】
 
-版本号 1.3.0 → DEV_LOG_v1.3.0.md → README 里程碑 M8 → §5 发版清单执行。
+版本号 1.3.0 → DEV_LOG_v1.3.0.md → README 里程碑 M8 → §4.4 发版清单执行。
 
 ---
 
@@ -124,30 +124,30 @@
 **做什么**：新建 `core/fingerprint.py`，对单个音频产出 chromaprint 指纹。
 
 **实现要点**：
-1. `fingerprint_file(path, analyze_seconds=120) -> str | None`：调 `ffmpeg -i <path> -t <sec> -af chromaprint=fp_format=raw -f null -`，解析 stderr 中的指纹行（**具体过滤器选项与输出格式以 V14-0 实测为准**——ffmpeg 的 chromaprint 滤镜走 `fp_format` 参数，没有 fpcalc 的 `raw=1` 旗标，别照搬 fpcalc 文档）；指纹为 32bit 字序列，随时长线性增长（120s 约数 KB），ffmpeg 失败/超时返回 None（降级不阻塞）。
-2. **采集时机（决策点 ④）**：建议**去重时按需采集**——用户点"去重清除"且勾选"声纹比对"时，后台 QRunnable 对已完成扫描的文件批量算指纹（进度条），结果存内存 dict（不进 detail，避免撑大扫描结果）。理由：扫描时顺带采集会让每首多一次 120 秒转码，扫描时长翻倍，收益只在去重场景。
+1. `fingerprint_file(path) -> str | None`：调 `ffmpeg -i <path> -af chromaprint=fp_format=raw -f null -`（**全长采集，不截断**——若只取前 120s，live 版多出的前奏会让两份指纹整体错位、窗口内滑移无法对齐；全长才能靠滑移覆盖 intro 差异），解析 stderr 中的指纹行（**具体过滤器选项与输出格式以 V14-0 实测为准**——ffmpeg 的 chromaprint 滤镜走 `fp_format` 参数，没有 fpcalc 的 `raw=1` 旗标，别照搬 fpcalc 文档）；指纹为 32bit 字序列（每字约 0.12s），一首 4 分钟歌约 2000 字（数十 KB hex），随时长线性；ffmpeg 失败/超时返回 None（降级不阻塞）。
+2. **采集时机（决策点 ④）**：建议**去重时按需采集**——用户点"去重清除"且勾选"声纹比对"时，后台 QRunnable 对已完成扫描的文件批量算指纹（进度条），结果存内存 dict（不进 detail，避免撑大扫描结果）。理由：扫描时顺带采集会让每首多一次全曲转码，扫描时长近乎翻倍，收益只在去重场景。
 3. 并发：QThreadPool（线程数同扫描设置），`hidden_subprocess_kwargs` 防黑窗。
 
-**验收**：同一首歌不同码率两文件指纹汉明距离小、不同歌曲距离大（用 `_test_real` 或合成样本定量：同类 <0.25、异类 >0.35 的阈值区间存在）；采集 100 首 <2 分钟。
+**验收**：同一首歌不同码率两文件指纹汉明距离小、不同歌曲距离大（用 `_test_real` 或合成样本定量：同类 <0.25、异类 >0.35 的阈值区间存在）；**同曲不同起点/裁剪对距离同样落在同类区间**（全长+滑移的验证锚点）；采集 100 首 <3 分钟。
 
 ### V14-2 指纹比对与第三路并查【M】
 
 **做什么**：指纹汉明距离比对接入 `find_duplicate_groups` 作为第三路证据。
 
 **实现要点**：
-1. 比对算法：raw 指纹按 32-bit 字分块（chromaprint 标准块），归一化汉明距离（0-1），对齐搜索 ±8 块滑移取最小值；numpy popcount 向量化（`np.bitwise_xor` + 256 项查表按字节累积）。
-2. **候选生成（防漏检的关键设计）**：不能按"首块哈希"分桶——同一录音不同起点/裁剪的首块必然不同，会进不同桶导致永远不被比对（漏检）。采用两级：①时长预筛（±10%，沿用现有思路）；②**多锚点子指纹倒排索引**（Shazam 式 LSH）——每条指纹取 K 个固定相对位置（如第 5/50/100 个字）的 32bit 子指纹建倒排表，任一锚点碰撞即成为候选对；候选对再走全序列滑移精算。同曲变体（不同编码/轻微裁剪）锚点字完全一致的概率极高，不同歌碰撞率极低。
+1. 比对算法：raw 指纹按 32-bit 字分块（chromaprint 标准块，每字约 0.12s），归一化汉明距离（0-1）。**滑移范围按需计算**：候选对滑移上限 = ceil(两文件时长差 ÷ 0.12s) + 64 块（约 8s 余量，覆盖 live 前奏/结尾差异——固定 ±8 块只对齐得了编码级噪声）；numpy popcount 向量化（`np.bitwise_xor` + 256 项查表按字节累积）。
+2. **候选生成（防漏检的关键设计）**：不能用"首块/固定锚点位置"分桶——任何**固定位置**的字在裁剪/前奏差异下都会错位（首块必不同，百分比锚点在裁剪后指向不同乐句）。采用**全字倒排 + 碰撞计数**（Shazam 式）：每条指纹的全部字建倒排索引（uint32 → 文件列表；万级曲库约千万级 dict 插入，可承受），**两文件共享字数 ≥ 阈值（初始 8）才成为候选对**，候选对再走滑移精算。同曲变体（不同编码/裁剪/live）的重叠段共享大量字，不同歌的随机碰撞过不了计数门槛；指纹字数 < 阈值的短文件直接放弃指纹路（宁漏勿错，退回签名路）；时长预筛（±10%）仍在建索引前执行以缩小集合。
 3. 阈值（**宁漏勿错**）：归一化距离 ≤0.30 判"同一录音"；结果在 DupGroup 标注来源：`同名` / `同内容签名` / `声纹相似(87%)`。
 4. 接口：`find_duplicate_groups(items, fingerprints=None)`——fingerprints 传 None 时行为与现在完全一致（向后兼容，测试不破坏）。
 5. `CompareDialog` 每组标注相似度百分比。
 
-**验收**：同一首歌"live 版 vs 录音室版"（同名不同内容签名）在指纹路被合并且标注相似度；**"同曲不同起点/裁剪"变体对也能命中**（锚点倒排不依赖首块，此为分桶设计的回归锚点）；不同歌曲零误合并（回归用例 ≥10 对）；不勾选声纹时全量旧测试绿。
+**验收**：同一首歌"live 版 vs 录音室版"（同名不同内容签名）在指纹路被合并且标注相似度；**"同曲不同起点/裁剪"变体对也能命中**（全字倒排不依赖固定位置，此为候选生成设计的回归锚点）；不同歌曲零误合并（回归用例 ≥10 对）；不勾选声纹时全量旧测试绿。
 
 ### V14-3 升频检测辅助指标【S】
 
 **做什么**：新增"疑似升频"提示（只展示，不评分）。
 
-**实现要点**：`core/analyzer.py` 新函数（不动现有函数）`upscale_hint(meta, cutoffs, dr) -> str`：满足 `sample_rate ≥ 88200` 且 `-60dB 截止 < 20000`，或 `bit_depth ≥ 24 且 DR < 6`（与既有第三规则不同阈值，仅提示）返回 `"疑似升频（高采样率但有效带宽不足）"` 等，否则空。结果存 `detail['upscale_hint']`，表格状态列 tooltip + HTML 报告展示，CSV 加列。
+**实现要点**：`core/analyzer.py` 新函数（不动现有函数）`upscale_hint(meta, cutoffs, dr) -> str`：满足 `sample_rate ≥ 88200` 且 `0 < -60dB 截止 < 20000`，或 `bit_depth ≥ 24 且 0 < DR < 6`（与既有第三规则不同阈值，仅提示；**cutoff/DR 为 0 是分析兜底值，必须排除**——否则坏文件会被误标"疑似升频"）返回 `"疑似升频（高采样率但有效带宽不足）"` 等，否则空。结果存 `detail['upscale_hint']`，表格状态列 tooltip + HTML 报告展示，CSV 加列。
 
 **验收**：44.1k 正常文件无提示；96k 但截止 16k 的合成样本有提示；评分与假无损判定输出与 v1.2.0 逐字节一致（用 compare 脚本核对）。
 
@@ -155,7 +155,7 @@
 
 **做什么**：`SonicCheck.exe --scan <目录> [--threads N] [--seconds N] [--out 路径.csv|.html]`。
 
-**实现要点**：`main.py` 参数分支（argparse）；不创建 QApplication——直接 `concurrent.futures.ThreadPoolExecutor` 并行跑 `analyze_file`，进度打印 `N/M`；复用 `csv_exporter`/`html_report`（v1.3.0 已就位）。**打包冲突（必须处理）**：现打包是 `--windowed`（无控制台），exe 从命令行跑 `--scan` 时 stdout 未附着、print 无处可去——方案：用 ctypes `AttachConsole(ATTACH_PARENT_PROCESS)` 把输出接回调用方控制台（win32 惯用法，`--windowed` 下可用），并在文档注明"CLI 完整体验建议源码运行 `python main.py --scan`"；若 AttachConsole 失败（双击启动场景）则日志同时落 `soniccheck_cli.log`。
+**实现要点**：`main.py` 参数分支（argparse）；不创建 QApplication——直接 `concurrent.futures.ThreadPoolExecutor` 并行跑 `analyze_file`，进度打印 `N/M`；复用 `csv_exporter`/`html_report`（v1.3.0 已就位）；**默认参数与 GUI 默认严格一致**（分析 30 秒、线程数取 GUI 默认值），保证 CLI 与 GUI 对同一目录产出相同判定。**打包冲突（必须处理）**：现打包是 `--windowed`（无控制台），exe 从命令行跑 `--scan` 时 stdout 未附着、print 无处可去——方案：用 ctypes `AttachConsole(ATTACH_PARENT_PROCESS)` 把输出接回调用方控制台（win32 惯用法，`--windowed` 下可用），并在文档注明"CLI 完整体验建议源码运行 `python main.py --scan`"；若 AttachConsole 失败（双击启动场景）则日志同时落 `soniccheck_cli.log`。
 
 **验收**：`SonicCheck.exe --scan D:\Music --out report.csv` 无窗口出 CSV；与 GUI 扫描同目录结果行数与判定一致；`--help` 可用。
 
@@ -163,11 +163,11 @@
 
 **触发条件**：v1.2.0/v1.3.0 期间有用户反馈大文件解锁慢（≥50MB mflac）。否则本任务跳过。
 
-**实现要点**：`requirements` 增加可选说明（不进 requirements.txt）；运行时 `try: from Crypto.Cipher import ARC4` 探测，可用则 `_QmcRc4Cipher` 走分段 ARC4 实例 + discard skip 字节（C 速度），不可用回退现有纯 Python；`dev/bench_rc4.py` 输出两种路径吞吐对比。
+**实现要点**：可选依赖说明写入 `BUILDING.md`（"追求大文件解锁速度可 `pip install pyCryptodome`"，不进 requirements.txt）；运行时 `try: from Crypto.Cipher import ARC4` 探测，可用则 `_QmcRc4Cipher` 走分段 ARC4 实例 + discard skip 字节（C 速度），不可用回退现有纯 Python；`dev/bench_rc4.py` 输出两种路径吞吐对比。
 
 ### V14-6 批收尾与发版【S】
 
-版本号 1.4.0 → DEV_LOG → README 里程碑 M9 → §5 发版清单。
+版本号 1.4.0 → DEV_LOG → README 里程碑 M9 → §4.4 发版清单。
 
 ---
 
@@ -215,7 +215,7 @@
 
 ### V20-5 版本收尾【S】
 
-版本号 2.0.0 → DEV_LOG_v2.0.0 → README 里程碑 M10 + 目录结构更新（result_model/controllers）→ §5 发版清单。
+版本号 2.0.0 → DEV_LOG_v2.0.0 → README 里程碑 M10 + 目录结构更新（result_model/controllers）→ §4.4 发版清单。
 
 ---
 
@@ -258,14 +258,14 @@ v2.0:   V20-1 Model/View ──→ V20-2 主窗口拆分(在表格稳定后动�
 |---|---|---|
 | chromaprint 在 full 版输出格式与预期不符 | 中 | V14-0 前置验证先行（实测输出格式后才开 V14-1），不通过则整条链降级 fpcalc 方案 |
 | 指纹比对误报（不同歌判同） | 中 | 宁漏勿错阈值 + 相似度透明展示 + 默认可关；上线前 ≥10 对回归用例 |
-| 指纹候选分桶漏检（同曲变体错开分桶） | 中 | 禁用首块分桶；多锚点子指纹倒排（任一锚点碰撞即候选），V14-2 回归用例须含"同曲不同裁剪"对 |
+| 指纹候选分桶漏检（同曲变体错开分桶） | 中 | 禁用首块/固定锚点分桶；全字倒排+共享字数计数门槛，V14-2 回归用例须含"同曲不同裁剪"对 |
 | windowed exe 无控制台，CLI 输出丢失 | 高（不处理必现） | AttachConsole(ATTACH_PARENT_PROCESS) + 日志文件兜底 + 文档引导源码运行 |
 | Model/View 重构引入交互回归 | 中 | 保留 legacy 实现一个版本；性能与功能双基准脚本进 dev/ |
 | CI 与本地打包产物不一致 | 低 | 双轨验证一次；ffmpeg 钉版本 + sha256 |
 | analyzer 附加字段撑大内存（万级曲库） | 低 | 频率网格常量化 + dB 数组二进制存储（~1KB/文件）；禁止 Python list；CSV 不含频谱列 |
 | 解锁 RC4 换 C 库引入依赖问题 | 低 | 条件触发 + 运行时探测回退，默认零依赖不动 |
 
-### 4.4 每版固定收尾清单（§5，执行者照此走）
+### 4.4 每版固定收尾清单（执行者照此走）
 
 1. `python tests/run_all.py` 全绿；新增任务的本版回归用例已入套件
 2. `pip freeze > requirements-freeze.txt`
