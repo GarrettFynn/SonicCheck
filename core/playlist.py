@@ -144,10 +144,17 @@ def _track_entry(t: dict) -> PlaylistEntry:
         '/'.join(a.get('name', '') for a in artists))
 
 
-def _fetch_song_details(ids: list, cookie: str = "") -> dict:
-    """按 id 分批取歌曲详情，返回 {id: track}（SONG_BATCH 个/次）"""
+def _fetch_song_details(ids: list, cookie: str = "",
+                        progress_cb=None, cancel_check=None) -> dict:
+    """按 id 分批取歌曲详情，返回 {id: track}（SONG_BATCH 个/次）。
+
+    progress_cb(已获取数, 总数) 每批回调一次；cancel_check() 返回 True
+    时抛 _FetchCancelled（千首歌单串行请求需数秒~数十秒，后台化后供 UI
+    汇报进度并支持取消）。"""
     out: dict = {}
     for i in range(0, len(ids), SONG_BATCH):
+        if cancel_check is not None and cancel_check():
+            raise _FetchCancelled()
         batch = ids[i:i + SONG_BATCH]
         qs = urllib.parse.quote(json.dumps(batch))
         raw = _netease_get(SONG_DETAIL_API.format(qs), cookie=cookie)
@@ -155,16 +162,26 @@ def _fetch_song_details(ids: list, cookie: str = "") -> dict:
         for s in data.get('songs') or []:
             if s.get('id') is not None:
                 out[s['id']] = s
+        if progress_cb is not None:
+            progress_cb(len(out), len(ids))
     return out
 
 
-def fetch_netease_playlist(url_or_id: str, music_u: str = "") -> tuple:
+class _FetchCancelled(Exception):
+    """用户取消歌单补全（内部信号，不对外）"""
+
+
+def fetch_netease_playlist(url_or_id: str, music_u: str = "",
+                           progress_cb=None,
+                           cancel_check=None) -> tuple:
     """拉取网易云公开歌单，返回 (entries, 歌单名, 歌单真实总数或 None)。
 
     全量策略（零登录）：v6 详情接口匿名即返回**完整 trackIds**，tracks 虽
     被限流截断（约前 10 首），但可用 trackIds 分批调歌曲详情接口补全，
     并保持歌单原顺序。仅当 trackIds 也缺失时才退化为截断警告/手动粘贴。
     MUSIC_U 仍可选（私密歌单等场景）。失败抛 RuntimeError。
+
+    progress_cb / cancel_check 直通 _fetch_song_details（B4 后台化用）。
     """
     pid = extract_netease_id(url_or_id)
     if not pid:
@@ -186,7 +203,11 @@ def fetch_netease_playlist(url_or_id: str, music_u: str = "") -> tuple:
     if track_ids and len(track_ids) > len(tracks):
         # 截断 → 用全量 trackIds 分批补全
         try:
-            by_id = _fetch_song_details(track_ids, cookie)
+            by_id = _fetch_song_details(track_ids, cookie,
+                                        progress_cb=progress_cb,
+                                        cancel_check=cancel_check)
+        except _FetchCancelled:
+            raise RuntimeError("已取消解析（未获取的歌单内容已放弃）")
         except Exception as exc:
             raise RuntimeError(f"歌单补全失败（已获取前 {len(tracks)} 首）: "
                                f"{exc}，可重试或改用文本粘贴") from exc

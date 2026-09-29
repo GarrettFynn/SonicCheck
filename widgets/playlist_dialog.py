@@ -8,14 +8,46 @@
 3. 粘贴网易云歌单链接解析（失败时提示改用方式 1）
 
 流程：输入 → "解析并匹配"预览（已匹配/未匹配数）→ 确认复制。
+网易云解析在后台线程执行（B4）：千首歌单的串行分批请求不再冻结界面，
+带进度显示与取消。
 """
 
+import threading
+
+from PyQt6.QtCore import QObject, QRunnable, QThreadPool, pyqtSignal
 from PyQt6.QtWidgets import (QDialog, QDialogButtonBox, QFileDialog,
                              QHBoxLayout, QLabel, QLineEdit, QPlainTextEdit,
                              QPushButton, QVBoxLayout, QWidget)
 
 from core.playlist import (fetch_netease_playlist, match_entries,
                            parse_playlist_file, parse_playlist_text)
+
+
+class _FetchSignals(QObject):
+    progress = pyqtSignal(int, int)   # 已获取, 总数
+    done = pyqtSignal(object)         # {'ok': bool, ...} / {'ok': False, 'error': str}
+
+
+class _FetchWorker(QRunnable):
+    def __init__(self, url: str, music_u: str, cancel: threading.Event):
+        super().__init__()
+        self.url = url
+        self.music_u = music_u
+        self.cancel = cancel
+        self.signals = _FetchSignals()
+
+    def run(self) -> None:
+        try:
+            entries, name, total = fetch_netease_playlist(
+                self.url, self.music_u,
+                progress_cb=lambda d, t: self.signals.progress.emit(d, t),
+                cancel_check=self.cancel.is_set)
+            self.signals.done.emit(
+                {'ok': True, 'entries': entries, 'name': name, 'total': total})
+        except RuntimeError as exc:
+            self.signals.done.emit({'ok': False, 'error': str(exc)})
+        except Exception as exc:  # 保底：网络栈的意外异常也转成可读错误
+            self.signals.done.emit({'ok': False, 'error': f'解析失败: {exc}'})
 
 
 class PlaylistDialog(QDialog):
@@ -27,6 +59,10 @@ class PlaylistDialog(QDialog):
         self._items = items
         self.entries: list = []
         self.match_result = None
+        self._fetch_cancel = threading.Event()
+        self._fetching = False
+        self._pool = QThreadPool(self)
+        self._pool.setMaxThreadCount(1)
         self.setWindowTitle("歌单导入")
         self.resize(680, 560)
 
@@ -109,31 +145,55 @@ class PlaylistDialog(QDialog):
         self._fill_text(entries)
 
     def _on_fetch_netease(self) -> None:
+        if self._fetching:  # 按钮此时是"取消"：置标志，线程在批间退出
+            self._fetch_cancel.set()
+            self.btn_fetch.setEnabled(False)
+            self.preview_label.setText("正在取消…")
+            return
         url = self.edit_url.text().strip()
         if not url:
             self.preview_label.setText("请先粘贴网易云歌单链接")
             return
-        self.btn_fetch.setEnabled(False)
+        self._fetching = True
+        self._fetch_cancel.clear()
+        self.btn_fetch.setText("取消")
+        self.btn_match.setEnabled(False)
+        self.btn_ok.setEnabled(False)
         self.preview_label.setText("正在拉取网易云歌单…")
-        try:
-            entries, name, total = fetch_netease_playlist(
-                url, self.edit_cookie.text())
-            self.edit_name.setText(name)
-            self._fill_text(entries)
-            if total is not None and len(entries) < total:
-                self.preview_label.setText(
-                    f"⚠ 网易云未登录仅返回前 {len(entries)} 首"
-                    f"（歌单共 {total} 首），已导入这部分。\n"
-                    f"要拉全量：在「高级」栏填入 MUSIC_U 后重新解析；"
-                    f"或改用 App/网页复制全量歌单文本粘贴到下方文本框")
-            else:
-                self.preview_label.setText(
-                    f"已解析 {len(entries)} 首，点击「解析并匹配」继续")
-        except RuntimeError as exc:
+
+        worker = _FetchWorker(url, self.edit_cookie.text(),
+                              self._fetch_cancel)
+        worker.signals.progress.connect(self._on_fetch_progress)
+        worker.signals.done.connect(self._on_fetch_done)
+        self._pool.start(worker)
+
+    def _on_fetch_progress(self, got: int, total: int) -> None:
+        self.preview_label.setText(
+            f"正在补全歌单内容（{got}/{total} 首）…可点「取消」中止")
+
+    def _on_fetch_done(self, payload: dict) -> None:
+        self._fetching = False
+        self.btn_fetch.setText("解析链接")
+        self.btn_fetch.setEnabled(True)
+        self.btn_match.setEnabled(True)
+        if not payload.get('ok'):
             self.preview_label.setText(
-                f"{exc}\n可改为在 App 内复制歌单文本后粘贴到上方文本框")
-        finally:
-            self.btn_fetch.setEnabled(True)
+                f"{payload.get('error', '解析失败')}\n"
+                f"可改为在 App 内复制歌单文本后粘贴到上方文本框")
+            return
+        entries = payload['entries']
+        self.edit_name.setText(payload['name'])
+        self._fill_text(entries)
+        total = payload.get('total')
+        if total is not None and len(entries) < total:
+            self.preview_label.setText(
+                f"⚠ 网易云未登录仅返回前 {len(entries)} 首"
+                f"（歌单共 {total} 首），已导入这部分。\n"
+                f"要拉全量：在「高级」栏填入 MUSIC_U 后重新解析；"
+                f"或改用 App/网页复制全量歌单文本粘贴到下方文本框")
+        else:
+            self.preview_label.setText(
+                f"已解析 {len(entries)} 首，点击「解析并匹配」继续")
 
     def _fill_text(self, entries: list) -> None:
         self.text_edit.setPlainText("\n".join(
@@ -161,3 +221,10 @@ class PlaylistDialog(QDialog):
     @property
     def playlist_name(self) -> str:
         return self.edit_name.text().strip() or "新歌单"
+
+    def reject(self) -> None:
+        if self._fetching:
+            self._fetch_cancel.set()
+            # 等线程排空：池销毁时仍有 QRunnable 在跑会崩溃（同解锁对话框）
+            self._pool.waitForDone(-1)
+        super().reject()
