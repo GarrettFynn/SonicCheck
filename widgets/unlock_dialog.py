@@ -20,6 +20,7 @@ from PyQt6.QtWidgets import (QCheckBox, QComboBox, QDialog, QDialogButtonBox,
 from core.qqmusic_key import EkeyStore, ensure_ekeys
 from core.unlock import (ENCRYPTED_EXTS, UnlockCancelled,
                          detect_encrypted_type, find_encrypted_files,
+                         reset_tag_breaker, tag_breaker_tripped,
                          unlock_file)
 from widgets.qqmusic_guide_dialog import QQMusicGuideDialog
 
@@ -428,6 +429,9 @@ class UnlockDialog(QDialog):
         self._running = True
         self._cancel.clear()
         self.results = []
+        reset_tag_breaker()   # B6：熔断器按批次重置
+        self._fetch_tags_wanted = self.check_tags.isChecked()
+        self._breaker_notified = False
         self.progress.setVisible(True)
         self.progress.setRange(0, len(self._files))
         self.progress.setValue(0)
@@ -459,6 +463,13 @@ class UnlockDialog(QDialog):
 
     def _on_file_done(self, idx: int, result) -> None:
         self.results.append(result)
+        # B6：熔断一次性提示（追加为列表尾部的说明行，不占文件索引）
+        if (self._fetch_tags_wanted and not self._breaker_notified
+                and tag_breaker_tripped()):
+            self._breaker_notified = True
+            self.list.addItem(
+                "⚠ 联网补标签已暂停：连续失败达阈值，本批剩余文件不再联网"
+                "补标签（解锁不受影响；网络恢复后可重新解锁补齐）")
         item = self.list.item(idx)
         tag = _FMT_TAG.get(self._fmt_tags.get(result.src, ''), '')
         prefix = f"[{tag}] " if tag else ''

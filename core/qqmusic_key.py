@@ -30,7 +30,9 @@ _COOKIE_MARKER = b'qqmusic_key='
 STORE_PATH = Path.home() / '.soniccheck' / 'qqmusic_ekeys.json'
 
 _API_URL = 'https://u.y.qq.com/cgi-bin/musicu.fcg'
-_API_TIMEOUT = 15
+# B6：15→8s。批量解锁每首串行 2 次请求（详情+封面），断网时超时越短
+# 熔断越快触发；8s 对正常请求（实测 <1s）余量充足
+_API_TIMEOUT = 8
 
 
 # ══════════════════════════════════════════════════════════════════

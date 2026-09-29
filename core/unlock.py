@@ -644,13 +644,52 @@ def _default_ekey_lookup(meta: dict) -> str:
 _ekey_lookup = _default_ekey_lookup
 
 
+# B6：批量解锁的网络熔断——联网补标签逐首串行 2 次请求，断网/服务
+# 不可用时每首白等超时，百首批量可拖半小时。连续失败达阈值后本批次
+# 跳过联网（不影响解锁本身），UnlockDialog 每批开始时 reset。
+_TAG_BREAKER_LOCK = threading.Lock()
+_TAG_FAIL_STREAK = 0
+_TAG_BREAKER_TRIP = False
+_TAG_BREAKER_THRESHOLD = 3
+
+
+def reset_tag_breaker() -> None:
+    """新一批解锁开始时重置熔断器（连续失败计数与跳闸状态）"""
+    global _TAG_FAIL_STREAK, _TAG_BREAKER_TRIP
+    with _TAG_BREAKER_LOCK:
+        _TAG_FAIL_STREAK = 0
+        _TAG_BREAKER_TRIP = False
+
+
+def tag_breaker_tripped() -> bool:
+    """熔断器是否已跳闸（UI 据此一次性提示用户）"""
+    with _TAG_BREAKER_LOCK:
+        return _TAG_BREAKER_TRIP
+
+
 def _default_tag_fetcher(song_mid: str) -> dict:
-    """按 song_mid 联网补齐 QQ 音乐标签（title/artist/album/cover）"""
+    """按 song_mid 联网补齐 QQ 音乐标签（title/artist/album/cover）
+
+    fetch_track_info 任何失败都返回 {}，与"成功但无歌名"无法区分——
+    以 title 非空计成功；连续 N 次无 title 视为服务不可用，跳闸。
+    """
+    global _TAG_FAIL_STREAK, _TAG_BREAKER_TRIP
+    with _TAG_BREAKER_LOCK:
+        if _TAG_BREAKER_TRIP:
+            return {}
     try:
         from core.qqmusic_key import fetch_track_info
-        return fetch_track_info(song_mid)
+        info = fetch_track_info(song_mid)
     except Exception:
-        return {}
+        info = {}
+    with _TAG_BREAKER_LOCK:
+        if info.get('title'):
+            _TAG_FAIL_STREAK = 0
+        else:
+            _TAG_FAIL_STREAK += 1
+            if _TAG_FAIL_STREAK >= _TAG_BREAKER_THRESHOLD:
+                _TAG_BREAKER_TRIP = True
+    return info
 
 
 # 测试可替换的标签补全钩子：song_mid → 标签 dict（{} 表示失败/降级）
