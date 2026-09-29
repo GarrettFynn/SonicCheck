@@ -197,5 +197,53 @@ def main():
         sys.exit(1)
 
 
+def test_dedup_false_positive_guards():
+    """v1.1.1 去重误报加固回归：纯名字撞车与退化指标不得产生重复组
+
+    场景来源：不同专辑的 01.flac（轨号命名、无标签）曾被纯名字分组合并，
+    用户批量确认后会移走不同歌曲——去重是破坏性操作，必须宁漏勿错。
+    """
+    print("5. deduper：纯文件名/退化指标误报防护")
+    d5a, d5b = Path(tempfile.mkdtemp(prefix='dedup_a_')), \
+        Path(tempfile.mkdtemp(prefix='dedup_b_'))
+
+    # 轨号同名、无标签、内容签名不同（不同专辑的 01.flac）→ 不得合并
+    t1 = make_item(d5a, '01.flac', title='', artist='',
+                   duration=180.0, dr=12.0, corr=0.9, cutoff=22000.0)
+    t2 = make_item(d5b, '01.flac', title='', artist='',
+                   duration=241.0, dr=6.0, corr=0.3, cutoff=16000.0)
+    check('轨号同名不同内容不误报',
+          not deduper.find_duplicate_groups([t1, t2]))
+
+    # 正向对照：轨号同名且签名一致 → 仍合并（真重复不受加固影响）
+    t3 = make_item(d5b, '01 (1).flac', title='', artist='',
+                   duration=180.0, dr=12.0, corr=0.9, cutoff=22000.0)
+    check('轨号同名同内容仍合并',
+          len(deduper.find_duplicate_groups([t1, t3])) == 1)
+
+    # 非通用名撞名但签名不同 → 不合并（路 1 签名复核）
+    n1 = make_item(d5a, '晴天.flac', title='', artist='',
+                   duration=200.0, dr=9.0, corr=0.5, cutoff=21000.0)
+    n2 = make_item(d5b, '晴天.flac', title='', artist='',
+                   duration=260.0, dr=7.0, corr=0.4, cutoff=15000.0)
+    check('同名不同内容不误报',
+          not deduper.find_duplicate_groups([n1, n2]))
+
+    # 退化指标（时长 0、三指标全 0）同名 → 不合并（兜底值不"相等"）
+    z1 = make_item(d5a, '坏文件.flac', title='', artist='',
+                   duration=0.0, dr=0.0, corr=0.0, cutoff=0.0)
+    z2 = make_item(d5b, '坏文件.flac', title='', artist='',
+                   duration=0.0, dr=0.0, corr=0.0, cutoff=0.0)
+    check('退化指标不互相合并',
+          not deduper.find_duplicate_groups([z1, z2]))
+
+    failed = [n for n, ok in PASS if not ok]
+    print(f"  结果: {len(PASS)} 项中失败 {len(failed)} 项")
+    if failed:
+        print("失败项:", failed)
+        sys.exit(1)
+
+
 if __name__ == '__main__':
     main()
+    test_dedup_false_positive_guards()
