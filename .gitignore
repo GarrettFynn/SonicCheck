@@ -27,8 +27,5 @@ desktop.ini
 # 内置 ffmpeg 二进制（约 193MB，不入库；打包前按 BUILDING.md 放置）
 resources/ffmpeg/
 
-# 本地测试样本（私有曲库文件，体积大）
+# 本地测试样本（私有曲库文件，体积大，不公开）
 _test_real/
-
-# 本地回归测试（不公开，仅开发机使用）
-tests/
