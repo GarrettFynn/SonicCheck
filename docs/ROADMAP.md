@@ -39,22 +39,23 @@
 **做什么**：详情对话框显示频谱曲线（对数频率轴、dB 轴），标注断崖频率与 -60dB 截止线；对比对话框支持双曲线同屏叠加。
 
 **现状与数据链**（实现依据）：
-- `AudioAnalyzer._spectrum` 已缓存 `(freqs, db)`（约 150 万点），但 `analyze()` 结果 dict **没有**存频谱——需要补存储。
+- `AudioAnalyzer._spectrum` 已缓存 `(freqs, db)`（约 105 万点，30s×48k 补零到 2^21 的 rfft），但 `analyze()` 结果 dict **没有**存频谱——需要补存储。
 - `DetailDialog`（widgets/detail_dialog.py，83 行）纯 QFormLayout 文字行。
 - `CompareDialog`（widgets/compare_dialog.py）分左右两栏展示对比组。
 
 **实现要点**：
-1. `core/analyzer.py`：`analyze()` 返回值新增 `spectrum` 字段——把 `(freqs, db)` 降采样为 **256 点对数频率分档**（每档取区间内 dB 最大值，保断崖形态），存 `[[f1,db1], ...]`；采样率已知恒 48k 无需另存。万级曲库内存增量约 20MB，可接受。**注意：此改动在 analyzer 内但不触碰判定/评分路径，仅附加字段。**
+1. `core/analyzer.py`：`analyze()` 返回值新增 `spectrum` 字段——把 `(freqs, db)` 降采样为 **256 点对数频率分档**（每档取区间内 dB 最大值，保断崖形态）。**存储格式必须紧凑**：对数频率网格是常量（模块级定义，所有文件共享），`spectrum` 字段只存 256 个 dB 值，用 `array('f').tobytes()` 或 base64 字符串（约 1KB/文件，万级曲库 ~10MB）；**禁止用 Python list 存浮点**——对象开销会把内存放大一个数量级（~200MB）。**注意：此改动在 analyzer 内但不触碰判定/评分路径，仅附加字段。**
 2. 新建 `widgets/spectrum_view.py`：`SpectrumView(QWidget)`，`paintEvent` 用 QPainter 画折线；X 轴 20Hz–24kHz 对数刻度（画 100/1k/10k 三条网格线），Y 轴 -100–0dB；接受可选标注参数 `cliff_freq`（红色竖虚线+文字）、`cutoff_60db`（黄色竖虚线）。颜色用 style.qss 现有 VSCode 色板（曲线 #4EC9B0，网格 #3C3C3C）。
 3. `SpectrumView.set_data(spectrum, cliff=None, cutoff=None)`；支持 `overlay(spectrum2)` 画第二条半透明曲线（对比模式，第二曲线 #CE9178）。
 4. `DetailDialog`：表单下方加 `SpectrumView`（高度 220px），数据取 `item.detail['spectrum']`；无数据（旧结果）时显示占位文字"频谱数据不可用（请重新扫描）"。
-5. `CompareDialog`：选中两行时底部出现叠加频谱图（同曲不同音质的曲线差异是卖点）。
+5. `CompareDialog`：选中两行时底部出现叠加频谱图（同曲不同音质的曲线差异是卖点）；**仅 MODE_COMPARE 模式启用，MODE_DEDUPE（去重清除预览）不加**——去重界面信息密度已高，且叠加图对"选谁保留"决策无帮助。
 
 **验收标准**：
 - 双击任一扫描结果行：详情窗口出现频谱曲线，断崖文件在断崖处有红色标注线，与判定原因的频率数值一致。
 - 对比对话框选两首：两条曲线同屏可分辨；同内容不同码率的两文件曲线高度重合、截止位置不同肉眼可辨。
 - 离屏冒烟 `dev/render_spectrum.py`：构造含断崖的合成频谱数据渲染并 savefig 验证不崩；截图入 `dev/`。
 - 全量测试绿（analyzer 附加字段不破坏现有断言）。
+- **`dev/compare_new_vs_legacy.py` 全字段比对须排除新增的 `spectrum` 字段后重跑，判定/评分各字段 diff 仍为 0**（迁移验证口径不被附加字段破坏）。
 
 **风险与回退**：降采样丢失窄带特征 → 256 点对数分档已保高频细节（高频段点密）；仍嫌粗可提 512 点。回退 = 不读 `spectrum` 字段即回旧行为。
 
@@ -67,7 +68,7 @@
    - **扫描**：线程数（1-32）、每首分析秒数（10-120）、默认安全模式开关；
    - **质量标记**：真/假标记文本 + 前后缀（吸收现有 `QualityMarkDialog`，原对话框删除或变为"标记设置"入口）；
    - **高级**：临时文件清理阈值展示（只读说明）、"打开配置文件夹"按钮（QSettings 无文件，改为打开 `~/.soniccheck/`）。
-2. QSettings 键收拢到 `settings/` 命名空间：`settings/threads`、`settings/seconds`、`settings/safe`、`settings/marks/*`；**旧键读取兼容**（启动时读旧键迁移到新键并删除旧键，一次性迁移函数）。
+2. QSettings 键收拢到 `settings/` 命名空间：`settings/threads`、`settings/seconds`、`settings/safe`、`settings/marks/*`；**旧键读取兼容**——需迁移的现有键枚举：`window_geometry`、`last_folder`（并入 V13-4 的 `recent_folders`）、`safe/enabled`、`marks/true`、`marks/fake`、`marks/position`、`guide_seen`；启动时一次性迁移函数（读旧键→写新键→删旧键），迁移逻辑配离屏单测。
 3. 左栏处理（**决策点 ①**）：建议**保留**左栏的线程数/分析时长控件与设置面板双向同步（扫描是最高频操作，入口不该藏进弹窗），设置面板是统一收纳处；质量标记按钮从左栏移除（低频操作归设置面板）。
 4. `btn_settings` 解除 disabled，连接打开对话框。
 
@@ -100,7 +101,7 @@
 3. 范围选择复用 `_pick_scope`（**决策点 ②**：建议默认"仅假无损"——证据卡才有意义，全部模式表格不带卡）。
 4. 文件名 `SonicCheck报告_YYYYMMDD_HHMM.html`，UTF-8。
 
-**验收**：报告用浏览器打开无外链依赖（断网可看）；假无损卡片频谱与详情对话框一致；1000 首歌单文件 <2MB。
+**验收**：报告用浏览器打开无外链依赖（断网可看）；假无损卡片频谱与详情对话框一致；含证据卡的报告（≤200 张卡）<2MB，千首全量明细表 <2MB。
 
 ### V13-6 批收尾与发版【S】
 
@@ -114,7 +115,7 @@
 
 **做什么**：把 `resources/ffmpeg/` 换成 **gyan full 版**（现 essentials 版无 chromaprint 滤镜，已实测确认），验证能力与代价。
 
-**步骤**：下载 full 版 → 替换 ffmpeg.exe/ffprobe.exe → `ffmpeg -filters | grep chromaprint` 确认 → 跑全量 28+ 测试 → 记录 zip 体积增量（预计 +30~50MB，123MB → ~160MB）→ 试用 `ffmpeg -i 样本 -af chromaprint -f null -` 抓 stderr 指纹输出格式。
+**步骤**：下载 full 版 → 替换 ffmpeg.exe/ffprobe.exe → `ffmpeg -filters | grep chromaprint` 确认 → 跑全量 3 套件（128 项断言）→ 记录 zip 体积增量（预计 +30~50MB，123MB → ~160MB）→ **实测指纹输出**：分别试 `-af chromaprint -f null -` 与 `-af chromaprint=fp_format=raw -f null -`，抓取 stderr 确认输出行格式、指纹编码（raw/compressed/base64）与时长-指纹长度关系，实测结论写入 DEV_LOG 后再开 V14-1。
 
 **决策点 ③（批内最大决策）**：+40MB 体积是否可接受？——**建议接受**（对桌面用户无感，能力质变值得）；不可接受则降级方案为"首次使用指纹去重时提示下载 fpcalc.exe 到 ~/.soniccheck/"。本任务验证结论写入 DEV_LOG 后再开 V14-1。
 
@@ -123,7 +124,7 @@
 **做什么**：新建 `core/fingerprint.py`，对单个音频产出 chromaprint 指纹。
 
 **实现要点**：
-1. `fingerprint_file(path, analyze_seconds=120) -> str | None`：调 `ffmpeg -i <path> -t <sec> -af chromaprint=raw=1 -f null -`，解析 stderr 中的 `fingerprint:` 行（raw hex，约 1.6 万 bit）；ffmpeg 失败/超时返回 None（降级不阻塞）。
+1. `fingerprint_file(path, analyze_seconds=120) -> str | None`：调 `ffmpeg -i <path> -t <sec> -af chromaprint=fp_format=raw -f null -`，解析 stderr 中的指纹行（**具体过滤器选项与输出格式以 V14-0 实测为准**——ffmpeg 的 chromaprint 滤镜走 `fp_format` 参数，没有 fpcalc 的 `raw=1` 旗标，别照搬 fpcalc 文档）；指纹为 32bit 字序列，随时长线性增长（120s 约数 KB），ffmpeg 失败/超时返回 None（降级不阻塞）。
 2. **采集时机（决策点 ④）**：建议**去重时按需采集**——用户点"去重清除"且勾选"声纹比对"时，后台 QRunnable 对已完成扫描的文件批量算指纹（进度条），结果存内存 dict（不进 detail，避免撑大扫描结果）。理由：扫描时顺带采集会让每首多一次 120 秒转码，扫描时长翻倍，收益只在去重场景。
 3. 并发：QThreadPool（线程数同扫描设置），`hidden_subprocess_kwargs` 防黑窗。
 
@@ -134,12 +135,13 @@
 **做什么**：指纹汉明距离比对接入 `find_duplicate_groups` 作为第三路证据。
 
 **实现要点**：
-1. 比对算法：raw 指纹按 32-bit 字分块（chromaprint 标准块），对齐搜索 ±8 块滑移取最小归一化汉明距离（0-1）；numpy popcount 向量化（`np.bitwise_xor` + 查表 popcount），万级两两比对 O(n²) 需分桶——按指纹首块哈希粗分桶 + 时长预筛（±10%），只对同桶比对。
-2. 阈值（**宁漏勿错**）：归一化距离 ≤0.30 判"同一录音"；结果在 DupGroup 标注来源：`同名` / `同内容签名` / `声纹相似(87%)`。
-3. 接口：`find_duplicate_groups(items, fingerprints=None)`——fingerprints 传 None 时行为与现在完全一致（向后兼容，测试不破坏）。
-4. `CompareDialog` 每组标注相似度百分比。
+1. 比对算法：raw 指纹按 32-bit 字分块（chromaprint 标准块），归一化汉明距离（0-1），对齐搜索 ±8 块滑移取最小值；numpy popcount 向量化（`np.bitwise_xor` + 256 项查表按字节累积）。
+2. **候选生成（防漏检的关键设计）**：不能按"首块哈希"分桶——同一录音不同起点/裁剪的首块必然不同，会进不同桶导致永远不被比对（漏检）。采用两级：①时长预筛（±10%，沿用现有思路）；②**多锚点子指纹倒排索引**（Shazam 式 LSH）——每条指纹取 K 个固定相对位置（如第 5/50/100 个字）的 32bit 子指纹建倒排表，任一锚点碰撞即成为候选对；候选对再走全序列滑移精算。同曲变体（不同编码/轻微裁剪）锚点字完全一致的概率极高，不同歌碰撞率极低。
+3. 阈值（**宁漏勿错**）：归一化距离 ≤0.30 判"同一录音"；结果在 DupGroup 标注来源：`同名` / `同内容签名` / `声纹相似(87%)`。
+4. 接口：`find_duplicate_groups(items, fingerprints=None)`——fingerprints 传 None 时行为与现在完全一致（向后兼容，测试不破坏）。
+5. `CompareDialog` 每组标注相似度百分比。
 
-**验收**：同一首歌"live 版 vs 录音室版"（同名不同内容签名）在指纹路被合并且标注相似度；不同歌曲零误合并（回归用例 ≥10 对）；不勾选声纹时全量旧测试绿。
+**验收**：同一首歌"live 版 vs 录音室版"（同名不同内容签名）在指纹路被合并且标注相似度；**"同曲不同起点/裁剪"变体对也能命中**（锚点倒排不依赖首块，此为分桶设计的回归锚点）；不同歌曲零误合并（回归用例 ≥10 对）；不勾选声纹时全量旧测试绿。
 
 ### V14-3 升频检测辅助指标【S】
 
@@ -153,7 +155,7 @@
 
 **做什么**：`SonicCheck.exe --scan <目录> [--threads N] [--seconds N] [--out 路径.csv|.html]`。
 
-**实现要点**：`main.py` 参数分支（argparse）；不创建 QApplication——直接 `concurrent.futures.ThreadPoolExecutor` 并行跑 `analyze_file`，进度打印 `N/M`；复用 `csv_exporter`/`html_report`（v1.3.0 已就位）。打包后 exe 同样支持（PyInstaller 无需改）。
+**实现要点**：`main.py` 参数分支（argparse）；不创建 QApplication——直接 `concurrent.futures.ThreadPoolExecutor` 并行跑 `analyze_file`，进度打印 `N/M`；复用 `csv_exporter`/`html_report`（v1.3.0 已就位）。**打包冲突（必须处理）**：现打包是 `--windowed`（无控制台），exe 从命令行跑 `--scan` 时 stdout 未附着、print 无处可去——方案：用 ctypes `AttachConsole(ATTACH_PARENT_PROCESS)` 把输出接回调用方控制台（win32 惯用法，`--windowed` 下可用），并在文档注明"CLI 完整体验建议源码运行 `python main.py --scan`"；若 AttachConsole 失败（双击启动场景）则日志同时落 `soniccheck_cli.log`。
 
 **验收**：`SonicCheck.exe --scan D:\Music --out report.csv` 无窗口出 CSV；与 GUI 扫描同目录结果行数与判定一致；`--help` 可用。
 
@@ -254,11 +256,13 @@ v2.0:   V20-1 Model/View ──→ V20-2 主窗口拆分(在表格稳定后动�
 
 | 风险 | 概率 | 缓解 |
 |---|---|---|
-| chromaprint 在 full 版输出格式与预期不符 | 中 | V14-0 前置验证先行，不通过则整条链降级 fpcalc 方案 |
+| chromaprint 在 full 版输出格式与预期不符 | 中 | V14-0 前置验证先行（实测输出格式后才开 V14-1），不通过则整条链降级 fpcalc 方案 |
 | 指纹比对误报（不同歌判同） | 中 | 宁漏勿错阈值 + 相似度透明展示 + 默认可关；上线前 ≥10 对回归用例 |
+| 指纹候选分桶漏检（同曲变体错开分桶） | 中 | 禁用首块分桶；多锚点子指纹倒排（任一锚点碰撞即候选），V14-2 回归用例须含"同曲不同裁剪"对 |
+| windowed exe 无控制台，CLI 输出丢失 | 高（不处理必现） | AttachConsole(ATTACH_PARENT_PROCESS) + 日志文件兜底 + 文档引导源码运行 |
 | Model/View 重构引入交互回归 | 中 | 保留 legacy 实现一个版本；性能与功能双基准脚本进 dev/ |
 | CI 与本地打包产物不一致 | 低 | 双轨验证一次；ffmpeg 钉版本 + sha256 |
-| analyzer 附加字段撑大内存（万级曲库） | 低 | 256 点降采样已核算 ~20MB；报告 CSV 不含频谱列 |
+| analyzer 附加字段撑大内存（万级曲库） | 低 | 频率网格常量化 + dB 数组二进制存储（~1KB/文件）；禁止 Python list；CSV 不含频谱列 |
 | 解锁 RC4 换 C 库引入依赖问题 | 低 | 条件触发 + 运行时探测回退，默认零依赖不动 |
 
 ### 4.4 每版固定收尾清单（§5，执行者照此走）
@@ -271,7 +275,8 @@ v2.0:   V20-1 Model/View ──→ V20-2 主窗口拆分(在表格稳定后动�
 6. 三远端推送 main + tag（**全新版本号 tag，永不复用历史名**）
 7. GitHub **草稿** Release → 上传 zip → 核对文案（对比链接用 URL 编码的 tag 名）→ 勾 Latest → 发布
 8. DEV_LOG（`DEV_LOG_v{版本}.md`）写入 **internal 分支**（仅推 codehub）+ README 里程碑 + 提交推送
-9. 宣发素材（可选）：按 internal 分支 `docs/marketing/` 既有流程出抖音文案/卡片
+9. **internal 分支维护**：`git checkout internal && git merge main`，推 origin（internal 绝不推 gitee/github）
+10. 宣发素材（可选）：按 internal 分支 `docs/marketing/` 既有流程出抖音文案/卡片
 
 ---
 
