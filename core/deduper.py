@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """重复音乐检测与清除计划（功能 C）
 
-分组口径（两路并查，覆盖"相同音乐不同音质不同名字"）：
+分组口径（三路并查，覆盖"相同音乐不同音质不同名字"）：
 1. 标签分组：title+artist 都有标签的，按规范化标签合并；
    缺标签的退回"剥质量后缀的规范化文件名"——纯名字撞车必须内容签名
    复核通过才合并，且轨号/超短名（01、a）不参与名字合并
@@ -13,9 +13,10 @@
    能抓住"不同名字"的同内容文件）；时长 ≤0 或三指标全为兜底 0 值
    的退化结果不参与签名合并（否则一批短文件/坏文件会因"全 0 相等"
    并成假重复组）
-
-已知局限：不同音质（如有损 vs 无损两个版本）且无标签且文件名也不同
-的，无法自动识别——需要声纹指纹（chromaprint），二期再议。
+3. 声纹合并（v1.4.0，可选）：调用方传 fingerprints（chromaprint
+   raw 指纹，见 core/fingerprint.py）时启用第三路——跨改名/裁剪/
+   live 变体识别；命中组在 DupGroup.fp_note 标注来源与相似度。
+   不传 fingerprints 时行为与 v1.3.0 完全一致。
 
 清除方式（已拍板 C1）：非最优文件移动到目标文件夹 `_待清除/` 子目录，
 可恢复；同 stem 的 .lrc 一并移动；目标撞名自动加 (n) 序号。
@@ -54,6 +55,7 @@ class DupGroup:
     label: str                  # 组名（标签或文件名）
     items: list = field(default_factory=list)  # 按评分降序
     keep_override: object = None  # 用户在对比表手动指定的保留项（item）
+    fp_note: str = ""           # 声纹来源标注（如"声纹相似 93%"），空=无声纹路
 
     @property
     def keep(self):
@@ -110,8 +112,13 @@ def _same_signature(a, b) -> bool:
     return abs(da['cutoffs']['-60dB'] - db['cutoffs']['-60dB']) <= CUTOFF_TOL
 
 
-def find_duplicate_groups(items: list) -> list:
-    """返回 DupGroup 列表（每组 ≥2 个，按评分降序，items[0] 为建议保留）"""
+def find_duplicate_groups(items: list, fingerprints: dict = None) -> list:
+    """返回 DupGroup 列表（每组 ≥2 个，按评分降序，items[0] 为建议保留）。
+
+    fingerprints: {filepath: chromaprint raw 字节串}（可选，V14-2 声纹
+    第三路）；None 时行为与 v1.3.0 完全一致。声纹命中的组在 fp_note
+    标注"声纹相似 N%"（组内声纹对的最低相似度，保守展示）。
+    """
     done = [i for i in items if i.status == STATUS_DONE]
     # 并查集
     parent = {id(i): id(i) for i in done}
@@ -152,6 +159,25 @@ def find_duplicate_groups(items: list) -> list:
             if _same_signature(a, b):
                 union(id(a), id(b))
 
+    # 路 3：声纹合并（可选，宁漏勿错——阈值口径在 fingerprint 模块）
+    fp_pairs = {}   # (id_a, id_b) -> 相似度，供组标注
+    if fingerprints:
+        from core import fingerprint as _fp
+        durations = {i.filepath: i.detail['meta'].get('duration', 0)
+                     for i in done}
+        by_path = {i.filepath: i for i in done}
+        matches = _fp.fingerprint_matches(fingerprints, durations)
+        for pa, others in matches.items():
+            ia = by_path.get(pa)
+            if ia is None:
+                continue
+            for pb, sim in others.items():
+                ib = by_path.get(pb)
+                if ib is None:
+                    continue
+                union(id(ia), id(ib))
+                fp_pairs[(id(ia), id(ib))] = sim
+
     clusters = {}
     for i in done:
         clusters.setdefault(find(id(i)), []).append(i)
@@ -164,7 +190,15 @@ def find_duplicate_groups(items: list) -> list:
         meta = members[0].detail.get('meta', {})
         label = (meta.get('title') or
                  strip_quality_suffix(members[0].stem)) or members[0].filename
-        groups.append(DupGroup(label=label, items=members))
+        # 组内声纹标注：找组内成员间直接命中的声纹对（间接并入无直接
+        # 对的不标，避免夸大）
+        ids = {id(i) for i in members}
+        sims = [s for (x, y), s in fp_pairs.items()
+                if x in ids and y in ids]
+        fp_note = ''
+        if sims:
+            fp_note = f"声纹相似 {min(sims) * 100:.0f}%"
+        groups.append(DupGroup(label=label, items=members, fp_note=fp_note))
     groups.sort(key=lambda g: g.label.lower())
     return groups
 

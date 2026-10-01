@@ -129,6 +129,46 @@ def main():
     check('异曲未混入', 'd' not in matches.get('e', {})
           and 'e' not in matches.get('d', {}))
 
+    print("5. deduper 第三路接入")
+    from core.deduper import find_duplicate_groups
+    d5 = tmp / 'd5'
+    d5.mkdir()
+    from models.result_item import STATUS_DONE, ResultItem
+
+    def item5(name, title, artist, dur=60.0, dr=9.0, corr=0.5, cutoff=20000.0):
+        fp = str(d5 / name)
+        Path(fp).write_bytes(b'x' * 64)
+        return ResultItem(
+            filename=name, stem=Path(name).stem, filepath=fp, score=80.0,
+            cutoff_60db=cutoff, dr=dr, status=STATUS_DONE,
+            detail={'meta': {'title': title, 'artist': artist,
+                             'duration': dur, 'format': 'FLAC'},
+                    'cutoffs': {'-60dB': cutoff}, 'dr': dr,
+                    'correlation': corr})
+
+    # 改名变体：无标签、不同名字、签名可辨（时长错开防签名路合并）→
+    # 仅声纹路应合并并标注 fp_note
+    i1 = item5('演唱会现场版.flac', '', '', dur=65.0, dr=11.0, corr=0.9)
+    i2 = item5('MP3下载版.flac', '', '', dur=63.0, dr=8.0, corr=0.2)
+    i3 = item5('完全不同的歌.flac', '', '', dur=64.0, dr=6.0, corr=0.7)
+    w5 = np.random.default_rng(3)
+    fp_same = w5.integers(0, 2**31, 500, dtype=np.uint32).astype('<u4').tobytes()
+    fp_diff = w5.integers(0, 2**31, 500, dtype=np.uint32).astype('<u4').tobytes()
+    fps5 = {i1.filepath: fp_same, i2.filepath: fp_same,
+            i3.filepath: fp_diff}
+
+    groups = find_duplicate_groups([i1, i2, i3], fingerprints=fps5)
+    check('声纹路合并改名变体',
+          len(groups) == 1 and len(groups[0].items) == 2,
+          f'{[(len(g.items), g.label) for g in groups]}')
+    check('fp_note 标注相似度',
+          bool(groups) and groups[0].fp_note.startswith('声纹相似'),
+          groups[0].fp_note if groups else '')
+
+    # 不传 fingerprints：行为与 v1.3.0 一致（这两首签名可辨不合并）
+    groups0 = find_duplicate_groups([i1, i2, i3])
+    check('无指纹时向后兼容', not groups0)
+
     failed = [n for n, ok in PASS if not ok]
     print(f"\n结果: {len(PASS) - len(failed)}/{len(PASS)} 通过")
     if failed:
