@@ -48,7 +48,7 @@ from widgets.unlock_dialog import UnlockDialog
 
 APP_NAME = "SonicCheck"
 DISPLAY_NAME = "声鉴·曲库管家"
-APP_VERSION = "1.3.0"
+APP_VERSION = "1.4.0"
 ORG_NAME = "SonicCheck"
 
 DEFAULT_W, DEFAULT_H = 1200, 800
