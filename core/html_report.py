@@ -198,8 +198,13 @@ def export_html_report(items: list, folder: str, path: str,
         out.append('<h2>证据卡（判定依据）</h2>')
         for i in cards:
             d = i.detail
-            why = ('<br>'.join(_esc(x) for x in (i.fake_reasons or ['—']))
-                   if i.is_fake else '未检出假无损特征')
+            if i.is_fake:
+                why = '<br>'.join(_esc(x) for x in (i.fake_reasons or ['—']))
+            else:
+                why = '未检出假无损特征'
+            hint = d.get('upscale_hint', '')
+            if hint:
+                why += f'<br>⚠ {_esc(hint)}'
             svg = _svg_spectrum(d.get('spectrum', b''),
                                 d.get('cliff_freq', 0),
                                 d.get('cutoffs', {}).get('-60dB', 0))

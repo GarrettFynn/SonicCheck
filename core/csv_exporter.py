@@ -15,7 +15,7 @@ from models.result_item import STATUS_DONE
 CSV_COLUMNS = [
     '文件名', '格式', '编码', '采样率', '位深度', '比特率_kb',
     '截止_40dB', '截止_60dB', '截止_80dB', '动态范围_dB', '立体声相关',
-    '假无损', '假无损原因', '综合评分', '完整路径',
+    '假无损', '假无损原因', '疑似升频', '综合评分', '完整路径',
 ]
 
 
@@ -41,6 +41,7 @@ def item_to_row(item) -> dict:
         '立体声相关': round(d['correlation'], 3),
         '假无损': '是' if d['fake_lossless'] else '否',
         '假无损原因': '; '.join(d['fake_reasons']) if d['fake_lossless'] else '',
+        '疑似升频': d.get('upscale_hint', ''),
         '综合评分': round(d['score'], 1),
         '完整路径': item.filepath,
     }

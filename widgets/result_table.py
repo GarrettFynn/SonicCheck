@@ -240,8 +240,14 @@ class ResultTable(QWidget):
 
         cell = QTableWidgetItem(text)
         cell.setForeground(color)
-        if item.fake_reasons:
-            cell.setToolTip("\n".join(item.fake_reasons))  # ⑦-4：原因放 tooltip
+        tip_lines = list(item.fake_reasons)
+        # V14-3：疑似升频提示（不参与判定，仅 tooltip 提醒）
+        hint = item.detail.get('upscale_hint', '') \
+            if item.status == STATUS_DONE else ''
+        if hint:
+            tip_lines.append('⚠ ' + hint)
+        if tip_lines:
+            cell.setToolTip("\n".join(tip_lines))  # ⑦-4：原因放 tooltip
         elif item.status == STATUS_ERROR and item.error_message:
             cell.setToolTip(item.error_message)
         return cell, kind

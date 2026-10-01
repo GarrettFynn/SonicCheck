@@ -541,6 +541,8 @@ class AudioAnalyzer:
             'peak': peak,
             'fake_lossless': fake_lossless,
             'fake_reasons': fake_reasons,
+            # V14-3：疑似升频辅助提示（仅展示，不参与判定/评分）
+            'upscale_hint': upscale_hint(meta, cutoffs, dr),
             # v1.3.0 可视化附加字段：256 点对数分档 dB 概要（float32 字节串），
             # 不参与判定/评分（dev/compare_new_vs_legacy.py 全字段比对须排除）
             'spectrum': self.compute_spectrum_summary(),
@@ -549,6 +551,23 @@ class AudioAnalyzer:
     def cleanup(self) -> None:
         self._silent_remove(self.wav_path)
         self.wav_path = ""
+
+
+def upscale_hint(meta: dict, cutoffs: dict, dr: float) -> str:
+    """疑似升频辅助提示（V14-3，仅展示不评分，口径独立于假无损三规则）。
+
+    高采样率但有效带宽不足，或高位深但 DR 偏低——常见于有损源/CD 源
+    升频伪装。cutoff/DR 为 0 是分析兜底值（失败文件），必须排除，
+    否则坏文件会被误标。
+    """
+    sr = meta.get('sample_rate', 0)
+    cf = cutoffs.get('-60dB', 0)
+    if sr >= 88200 and 0 < cf < 20000:
+        return f"疑似升频（{sr}Hz 采样但 -60dB 截止仅 {cf:.0f}Hz）"
+    bd = meta.get('bit_depth', 0)
+    if bd >= 24 and 0 < dr < 6:
+        return f"疑似升频（{bd}bit 但 DR 仅 {dr:.1f}）"
+    return ''
 
 
 def score_quality(result: dict) -> float:
