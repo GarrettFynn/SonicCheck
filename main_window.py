@@ -34,9 +34,9 @@ from widgets.left_panel import LeftPanel
 from widgets.log_panel import LogPanel
 from widgets.playlist_dialog import PlaylistDialog
 from widgets.progress_bar import ProgressWidget
-from widgets.quality_mark_dialog import QualityMarkDialog
 from widgets.rename_dialog import RenameDialog
 from widgets.result_table import ResultTable
+from widgets.settings_dialog import SettingsDialog
 from widgets.summary_bar import SummaryBar
 from widgets.unlock_dialog import UnlockDialog
 
@@ -69,6 +69,7 @@ class MainWindow(QMainWindow):
         self._current_folder = ""
         self._results = {}  # filepath -> ResultItem（M3 导出/重命名的数据源）
 
+        self._migrate_settings()  # V13-2：旧键一次性迁入 settings/
         self._load_marks_config()
         self._build_ui()
         self._connect_signals()
@@ -90,9 +91,9 @@ class MainWindow(QMainWindow):
         """从 QSettings 恢复质量标记配置并注入 core 层"""
         from core.quality_marks import POS_SUFFIX
         set_mark_config(
-            mark_true=self._settings.value("marks/true", "_真无损"),
-            mark_fake=self._settings.value("marks/fake", "_假无损"),
-            position=self._settings.value("marks/position", POS_SUFFIX))
+            mark_true=self._settings.value("settings/marks/true", "_真无损"),
+            mark_fake=self._settings.value("settings/marks/fake", "_假无损"),
+            position=self._settings.value("settings/marks/position", POS_SUFFIX))
 
     def _init_engine(self) -> None:
         """M2：检查 ffmpeg/ffprobe 可用性并清理历史临时文件（⑦-7）"""
@@ -167,8 +168,7 @@ class MainWindow(QMainWindow):
         version.setObjectName("VersionLabel")
 
         self.btn_settings = QPushButton("设置", header)
-        self.btn_settings.setEnabled(False)  # P2 二期开放
-        self.btn_settings.setToolTip("设置面板将在二期开放，当前请使用左栏的线程数/分析时长")
+        self.btn_settings.setToolTip("扫描参数、质量标记等统一设置")
 
         lay.addWidget(icon_label)
         lay.addWidget(title)
@@ -183,7 +183,6 @@ class MainWindow(QMainWindow):
         lp.folder_dropped.connect(self.set_folder)
         lp.start_clicked.connect(self.on_start_scan)
         lp.stop_clicked.connect(self.on_stop_scan)
-        lp.marks_clicked.connect(self.on_marks)
         lp.guide_clicked.connect(self.on_guide)
         lp.unlock_clicked.connect(self.on_unlock)
         lp.chk_safe.toggled.connect(self._on_safe_toggled)
@@ -195,12 +194,38 @@ class MainWindow(QMainWindow):
         self.result_table.tag_rename_clicked.connect(self.on_tag_rename)
         self.result_table.playlist_clicked.connect(self.on_playlist)
         self.result_table.detail_requested.connect(self.on_show_detail)
+        self.btn_settings.clicked.connect(self.on_settings)
+        # V13-2：左栏扫描参数改动即时持久化（设置面板与左栏双向同步）
+        self.left_panel.spin_threads.valueChanged.connect(
+            lambda v: self._settings.setValue("settings/threads", v))
+        self.left_panel.spin_seconds.valueChanged.connect(
+            lambda v: self._settings.setValue("settings/seconds", v))
 
     # ---------------- 状态记忆（⑦-10） ----------------
     RECENT_MAX = 5
 
+    # V13-2：v1.2.x 及以前的 QSettings 旧键 → settings/ 命名空间
+    _SETTINGS_MIGRATIONS = {
+        "safe/enabled": "settings/safe",
+        "marks/true": "settings/marks/true",
+        "marks/fake": "settings/marks/fake",
+        "marks/position": "settings/marks/position",
+        "last_folder": "settings/last_folder",
+        "recent_folders": "settings/recent_folders",
+        "table/header_state": "settings/table/header_state",
+    }
+
+    def _migrate_settings(self) -> None:
+        """一次性迁移：读旧键 → 写新键 → 删旧键。幂等，可反复执行。"""
+        for old, new in self._SETTINGS_MIGRATIONS.items():
+            if self._settings.contains(old):
+                v = self._settings.value(old)
+                if v is not None:
+                    self._settings.setValue(new, v)
+                self._settings.remove(old)
+
     def _load_recent_folders(self) -> list:
-        raw = self._settings.value("recent_folders", []) or []
+        raw = self._settings.value("settings/recent_folders", []) or []
         if isinstance(raw, str):
             raw = [raw]
         return [f for f in raw if Path(f).is_dir()]
@@ -212,7 +237,7 @@ class MainWindow(QMainWindow):
             folders.remove(folder)
         folders.insert(0, folder)
         folders = folders[:self.RECENT_MAX]
-        self._settings.setValue("recent_folders", folders)
+        self._settings.setValue("settings/recent_folders", folders)
         self.left_panel.set_recent_folders(folders)
 
     def _restore_state(self) -> None:
@@ -220,12 +245,17 @@ class MainWindow(QMainWindow):
         if geo:
             self.restoreGeometry(geo)
         self.left_panel.chk_safe.setChecked(
-            self._settings.value("safe/enabled", False, type=bool))
+            self._settings.value("settings/safe", False, type=bool))
+        # V13-2：左栏扫描参数从设置持久化恢复（与设置面板同源）
+        self.left_panel.spin_threads.setValue(
+            self._settings.value("settings/threads", 8, type=int))
+        self.left_panel.spin_seconds.setValue(
+            self._settings.value("settings/seconds", 30, type=int))
         # V13-3：恢复列宽/排序状态（QByteArray）
-        header_state = self._settings.value("table/header_state")
+        header_state = self._settings.value("settings/table/header_state")
         if header_state:
             self.result_table.restore_header_state(header_state)
-        last = self._settings.value("last_folder", "")
+        last = self._settings.value("settings/last_folder", "")
         # V13-4：恢复最近文件夹菜单（无论 last 是否有效都要建）
         self.left_panel.set_recent_folders(self._load_recent_folders())
         if last and Path(last).is_dir():
@@ -235,7 +265,7 @@ class MainWindow(QMainWindow):
     def closeEvent(self, event: QCloseEvent) -> None:
         self._settings.setValue("window_geometry", self.saveGeometry())
         # V13-3：保存列宽/排序状态
-        self._settings.setValue("table/header_state",
+        self._settings.setValue("settings/table/header_state",
                                 self.result_table.save_header_state())
         # M2：退出前先停止线程池（协作式取消），再关闭窗口
         if self._scan_manager.is_running:
@@ -276,26 +306,43 @@ class MainWindow(QMainWindow):
     def set_folder(self, folder: str) -> None:
         self._current_folder = folder
         self.left_panel.set_folder_display(folder)
-        self._settings.setValue("last_folder", folder)
+        self._settings.setValue("settings/last_folder", folder)
         self._remember_folder(folder)
         self.log_panel.log(f"当前文件夹: {folder}")
         self._update_safe_label()
         self._refresh_restore_enabled()
 
     # ---------------- 质量标记 / 使用指南 / 安全模式 ----------------
-    def on_marks(self) -> None:
-        dialog = QualityMarkDialog(self)
-        if dialog.exec() != QualityMarkDialog.DialogCode.Accepted:
+    def on_settings(self) -> None:
+        """V13-2：统一设置面板；接受后写 QSettings 并即时生效"""
+        current = {
+            "threads": self.left_panel.spin_threads.value(),
+            "seconds": self.left_panel.spin_seconds.value(),
+            "safe": self.left_panel.chk_safe.isChecked(),
+            "mark_true": self._settings.value(
+                "settings/marks/true", "_真无损"),
+            "mark_fake": self._settings.value(
+                "settings/marks/fake", "_假无损"),
+            "position": self._settings.value(
+                "settings/marks/position", POS_SUFFIX),
+        }
+        dialog = SettingsDialog(current, self)
+        if dialog.exec() != SettingsDialog.DialogCode.Accepted:
             return
         v = dialog.values()
+        # 扫描参数 → 左栏控件（valueChanged 会自动落 QSettings）
+        self.left_panel.spin_threads.setValue(v["threads"])
+        self.left_panel.spin_seconds.setValue(v["seconds"])
+        self.left_panel.chk_safe.setChecked(v["safe"])
+        # 质量标记 → core 配置 + QSettings
         set_mark_config(v["mark_true"], v["mark_fake"], v["position"])
-        self._settings.setValue("marks/true", v["mark_true"])
-        self._settings.setValue("marks/fake", v["mark_fake"])
-        self._settings.setValue("marks/position", v["position"])
+        self._settings.setValue("settings/marks/true", v["mark_true"])
+        self._settings.setValue("settings/marks/fake", v["mark_fake"])
+        self._settings.setValue("settings/marks/position", v["position"])
         pos_text = "后缀" if v["position"] == "suffix" else "前缀"
         self.log_panel.log(
-            f"质量标记已更新: 真={v['mark_true']} 假={v['mark_fake']} "
-            f"（{pos_text}），对之后的重命名/标签改名生效")
+            f"设置已更新: 线程 {v['threads']}，分析 {v['seconds']} 秒，"
+            f"标记 真={v['mark_true']} 假={v['mark_fake']}（{pos_text}）")
 
     def on_guide(self) -> None:
         GuideDialog(self).exec()
@@ -339,7 +386,7 @@ class MainWindow(QMainWindow):
         return str(self._safe_root() / rel)
 
     def _on_safe_toggled(self, checked: bool) -> None:
-        self._settings.setValue("safe/enabled", checked)
+        self._settings.setValue("settings/safe", checked)
         self._update_safe_label()
         self._refresh_restore_enabled()
         if checked:

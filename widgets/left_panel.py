@@ -57,7 +57,6 @@ class LeftPanel(QFrame):
     start_clicked = pyqtSignal()
     stop_clicked = pyqtSignal()
     folder_dropped = pyqtSignal(str)
-    marks_clicked = pyqtSignal()      # 质量标记设置
     guide_clicked = pyqtSignal()      # 使用指南
     unlock_clicked = pyqtSignal()     # 格式解锁（ncm/qmc → flac/wav）
 
@@ -100,9 +99,7 @@ class LeftPanel(QFrame):
         self.spin_seconds.setSuffix(" 秒")
         lay.addLayout(self._row("线程数", self.spin_threads))
         lay.addLayout(self._row("分析时长", self.spin_seconds))
-        self.btn_marks = QPushButton("质量标记…", self)
-        self.btn_marks.setToolTip("自定义真/假无损文件名标记的文本与位置")
-        lay.addWidget(self.btn_marks)
+        # V13-2：质量标记移入「设置」面板，左栏不再重复
         self.btn_unlock = QPushButton("格式解锁…", self)
         self.btn_unlock.setToolTip(
             "把网易云 .ncm、QQ音乐 .mflac/.mgg/.qmc 等加密音频\n"
@@ -135,7 +132,6 @@ class LeftPanel(QFrame):
         self.btn_select.clicked.connect(self.select_clicked)
         self.btn_start.clicked.connect(self.start_clicked)
         self.btn_stop.clicked.connect(self.stop_clicked)
-        self.btn_marks.clicked.connect(self.marks_clicked)
         self.btn_guide.clicked.connect(self.guide_clicked)
         self.btn_unlock.clicked.connect(self.unlock_clicked)
         self.drop_area.folder_dropped.connect(self.folder_dropped)
