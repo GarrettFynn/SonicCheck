@@ -107,6 +107,31 @@ def run_cli(args) -> int:
     return 0
 
 
+def _install_crash_log() -> None:
+    """GUI 未捕获异常落盘 ~/.soniccheck/crash.log（v2.0.1）。
+
+    --windowed 打包后 stderr 不可见，闪退（如 V20-2 漏搬方法的
+    AttributeError）此前不留任何痕迹；钩子把 traceback 写文件并
+    弹一次系统错误框。CLI 分支不安装（异常直接打终端）。"""
+    import traceback
+
+    log_dir = Path.home() / '.soniccheck'
+    log_path = log_dir / 'crash.log'
+
+    def _hook(tp, val, tb) -> None:
+        try:
+            log_dir.mkdir(parents=True, exist_ok=True)
+            with open(log_path, 'a', encoding='utf-8') as f:
+                f.write(f"\n==== {__import__('datetime').datetime.now():%Y-%m-%d %H:%M:%S} ====\n")
+                traceback.print_exception(tp, val, tb, file=f)
+        except OSError:
+            pass
+        sys.__excepthook__(tp, val, tb)   # 保留默认行为（控制台/错误框）
+
+    sys.excepthook = _hook
+    del log_path  # 仅说明用途；实际路径在函数内构造
+
+
 def main() -> int:
     # CLI 分支：--scan 出现在参数里即走无头模式（不 import PyQt6）
     if '--scan' in sys.argv or '--help' in sys.argv or '-h' in sys.argv:
@@ -144,6 +169,8 @@ def main() -> int:
 
     from PyQt6.QtGui import QIcon
     from PyQt6.QtWidgets import QApplication
+
+    _install_crash_log()
 
     from main_window import (APP_NAME, APP_VERSION, ORG_NAME, MainWindow,
                              resource_path)

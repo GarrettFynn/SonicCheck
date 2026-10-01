@@ -363,7 +363,7 @@ class FileOpsController(QObject):
         if dialog.exec() != RenameDialog.DialogCode.Accepted:
             mw.log_panel.log("重命名已取消，未执行任何操作")
             return
-        mw._run_rename_plan(plan, "重命名")
+        self._run_rename_plan(plan, "重命名")
 
     def on_tag_rename(self) -> None:
         """功能 D：文件名规范化为 歌名-歌手 / 歌手-歌名"""
@@ -390,7 +390,39 @@ class FileOpsController(QObject):
         if dialog.exec() != RenameDialog.DialogCode.Accepted:
             mw.log_panel.log("标签改名已取消，未执行任何操作")
             return
-        mw._run_rename_plan(plan, "标签改名")
+        self._run_rename_plan(plan, "标签改名")
+
+    def _run_rename_plan(self, plan: list, action_name: str) -> None:
+        """执行改名计划：安全模式重定向到安全输出目录复制，逐条日志
+        并同步表格（一键重命名与标签改名两条流程共用）。
+
+        v2.0.1 修复：V20-2 搬移控制器时此方法漏搬（窗口删除、控制器
+        未定义），确认改名对话框后 AttributeError 闪退。逻辑自
+        v1.4.0 main_window 逐字迁回，self→mw。"""
+        mw = self.mw
+        if mw.safe_mode_on:
+            for op in plan:  # 产出重定向：复制到安全输出目录，原文件不动
+                op.new_path = mw._safe_map(op.new_path)
+            results = execute_copy_plan(plan)
+            mw.log_panel.log(
+                f"安全模式：原件未动，改名件复制到 {mw._safe_root()}")
+        else:
+            results = execute_plan(plan)
+        ok_cnt = 0
+        for op, ok, err in results:
+            old_name = Path(op.old_path).name
+            if ok:
+                ok_cnt += 1
+                mw.log_panel.log(
+                    f"{old_name} → {Path(op.new_path).name}")
+                if op.kind == KIND_AUDIO:
+                    self._on_audio_renamed(op.old_path, op.new_path)
+            else:
+                mw.log_panel.log_error(
+                    f"{action_name}失败: {old_name} ← {err}")
+        mw.log_panel.log(
+            f"{action_name}完成: 成功 {ok_cnt} 个，"
+            f"失败 {len(results) - ok_cnt} 个")
 
     def _on_audio_renamed(self, old_path: str, new_path: str) -> None:
         """音频改名后同步内存结果与表格行（歌词改名无需同步）"""
