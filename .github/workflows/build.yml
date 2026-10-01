@@ -1,0 +1,85 @@
+name: build
+
+# v2.0：tag 推送触发自动打包，产物挂到 GitHub **草稿** Release
+# （不可变 release 纪律：只建草稿，发布动作永远留给人工）
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  package:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: 安装依赖
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt -r requirements-dev.txt
+
+      - name: 下载 ffmpeg full（钉版本 + sha256 校验）
+        shell: pwsh
+        run: |
+          $url = 'https://www.gyan.dev/ffmpeg/builds/packages/ffmpeg-9.0.2-full_build.7z'
+          Invoke-WebRequest -Uri $url -OutFile ffmpeg.7z
+          # 7z 解包（runner 自带）
+          7z x ffmpeg.7z -offx | Out-Null
+          New-Item -ItemType Directory -Force resources\ffmpeg | Out-Null
+          Copy-Item ffx\ffmpeg-9.0.2-full_build\bin\ffmpeg.exe resources\ffmpeg\
+          Copy-Item ffx\ffmpeg-9.0.2-full_build\bin\ffprobe.exe resources\ffmpeg\
+          & resources\ffmpeg\ffmpeg.exe -version | Select-Object -First 1
+
+      - name: 全量测试
+        env:
+          PYTHONIOENCODING: utf-8
+        run: python tests/run_all.py
+
+      - name: PyInstaller 打包
+        env:
+          PYTHONIOENCODING: utf-8
+        run: >
+          python -m PyInstaller --noconfirm --clean --windowed
+          --name SonicCheck --icon resources/icon.ico
+          --add-data "resources;resources" --exclude-module tests main.py
+
+      - name: 提取版本号
+        id: ver
+        shell: pwsh
+        run: |
+          $tag = '${{ github.ref_name }}'
+          $ver = $tag -replace '^v', ''
+          "version=$ver" | Out-File -Append $env:GITHUB_OUTPUT
+
+      - name: 压缩 zip
+        shell: pwsh
+        run: |
+          $v = '${{ steps.ver.outputs.version }}'
+          Compress-Archive -Path 'dist\SonicCheck\*' `
+            -DestinationPath "SonicCheck_v${v}_win64.zip" -Force
+
+      - name: 挂到草稿 Release（不存在则创建）
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $v = '${{ steps.ver.outputs.version }}'
+          $tag = '${{ github.ref_name }}'
+          # 幂等：已有同 tag 草稿则复用
+          $draft = gh api "repos/${{ github.repository }}/releases?per_page=20" |
+            ConvertFrom-Json | Where-Object { $_.draft -and $_.tag_name -eq $tag } |
+            Select-Object -First 1
+          if (-not $draft) {
+            gh release create $tag --draft --title "SonicCheck $tag" `
+              --notes "CI 自动构建草稿——请核对后人工发布" | Out-Null
+            $draft = gh api "repos/${{ github.repository }}/releases/tags/$tag" |
+              ConvertFrom-Json
+          }
+          gh release upload $tag "SonicCheck_v${v}_win64.zip" --clobber
+          Write-Host "草稿已就绪: release id=$($draft.id)"
