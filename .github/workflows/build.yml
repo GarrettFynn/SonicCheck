@@ -25,21 +25,26 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt -r requirements-dev.txt
 
-      - name: 下载 ffmpeg full（钉版本 + 体积校验）
+      - name: 下载 ffmpeg（full 仅取 ffmpeg.exe；ffprobe 用 essentials，与本地/发布决策一致）
         shell: pwsh
         run: |
-          $url = 'https://www.gyan.dev/ffmpeg/builds/packages/ffmpeg-9.0.2-full_build.7z'
-          Invoke-WebRequest -Uri $url -OutFile ffmpeg.7z
-          $min = 150MB   # 完整包体积下限（版本漂移/截断下载防线；gyan 未发布固定 sha256）
-          if ((Get-Item ffmpeg.7z).Length -lt $min) {
-            throw "ffmpeg 包体积异常，疑似下载不完整"
+          # v1.4.0 决策：chromaprint 在 ffmpeg 里，ffprobe 无指纹功能用
+          # essentials——CI 必须与本地打包同构，否则体积 +127MB
+          Invoke-WebRequest -Uri 'https://www.gyan.dev/ffmpeg/builds/packages/ffmpeg-9.0.2-full_build.7z' -OutFile ffmpeg.7z
+          if ((Get-Item ffmpeg.7z).Length -lt 150MB) {
+            throw "ffmpeg full 包体积异常，疑似下载不完整"
           }
-          # 7z 解包（runner 自带）
+          Invoke-WebRequest -Uri 'https://www.gyan.dev/ffmpeg/builds/packages/ffmpeg-8.1-essentials_build.zip' -OutFile ffmpeg_ess.zip
+          if ((Get-Item ffmpeg_ess.zip).Length -lt 20MB) {
+            throw "ffmpeg essentials 包体积异常"
+          }
           7z x ffmpeg.7z -offx | Out-Null
-          New-Item -ItemType Directory -Force resources\ffmpeg | Out-Null
-          Copy-Item ffx\ffmpeg-9.0.2-full_build\bin\ffmpeg.exe resources\ffmpeg\
-          Copy-Item ffx\ffmpeg-9.0.2-full_build\bin\ffprobe.exe resources\ffmpeg\
-          & resources\ffmpeg\ffmpeg.exe -version | Select-Object -First 1
+          7z x ffmpeg_ess.zip -ofess | Out-Null
+          New-Item -ItemType Directory -Force resources/ffmpeg | Out-Null
+          Copy-Item ffx/ffmpeg-9.0.2-full_build/bin/ffmpeg.exe resources/ffmpeg/
+          Copy-Item fess/ffmpeg-8.1-essentials_build/bin/ffprobe.exe resources/ffmpeg/
+          & resources/ffmpeg/ffmpeg.exe -version | Select-Object -First 1
+          & resources/ffmpeg/ffprobe.exe -version | Select-Object -First 1
 
       - name: 全量测试
         env:
