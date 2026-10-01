@@ -60,6 +60,13 @@ class CompareDialog(QDialog):
         right.addWidget(self.hint)
         self.table = QTableWidget(self)
         right.addWidget(self.table, 1)
+        # V13-1：叠加频谱（仅同名对比模式；去重预览界面密度已高不加）
+        if mode == MODE_COMPARE:
+            from widgets.spectrum_view import SpectrumView
+            self.spectrum = SpectrumView(self)
+            self.spectrum.setMinimumHeight(180)
+            self.spectrum.setVisible(False)
+            right.addWidget(self.spectrum)
 
         buttons = QDialogButtonBox(self)
         clear_cnt = sum(len(g.clear) for g in groups)
@@ -138,3 +145,17 @@ class CompareDialog(QDialog):
         for c in range(1, len(files) + 1):
             self.table.horizontalHeader().setSectionResizeMode(
                 c, QHeaderView.ResizeMode.Stretch)
+
+        # V13-1：恰好两个文件且有频谱数据时显示叠加曲线
+        if self._mode == MODE_COMPARE:
+            spec = getattr(self, 'spectrum', None)
+            if spec is not None:
+                if len(files) == 2 and all(
+                        i.detail.get('spectrum') for i in files):
+                    spec.setVisible(True)
+                    spec.set_data(files[0].detail['spectrum'],
+                                  cliff_freq=files[0].detail.get('cliff_freq', 0),
+                                  cutoff_60db=files[0].detail['cutoffs']['-60dB'])
+                    spec.set_overlay(files[1].detail['spectrum'])
+                else:
+                    spec.setVisible(False)

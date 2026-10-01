@@ -23,6 +23,7 @@ class DetailDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle(f"文件详情 - {item.filename}")
         self.setMinimumWidth(520)
+        self.setMinimumHeight(620)
 
         d = item.detail
         meta = d.get('meta', {})
@@ -69,6 +70,14 @@ class DetailDialog(QDialog):
         lay = QVBoxLayout(self)
         lay.setContentsMargins(16, 16, 16, 16)
         lay.addLayout(form)
+        # V13-1：频谱概要图（断崖/截止标注；旧结果无 spectrum 字段时显示占位）
+        from widgets.spectrum_view import SpectrumView
+        self.spectrum = SpectrumView(self)
+        self.spectrum.setMinimumHeight(220)
+        self.spectrum.set_data(d.get('spectrum', b''),
+                               cliff_freq=d.get('cliff_freq', 0),
+                               cutoff_60db=cutoffs.get('-60dB', 0))
+        lay.addWidget(self.spectrum, 1)
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close, self)
         buttons.button(QDialogButtonBox.StandardButton.Close).setText("关闭")
         btn_open = buttons.addButton("打开所在文件夹",

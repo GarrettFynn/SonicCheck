@@ -43,6 +43,30 @@ EPS = 1e-10            # 与旧脚本相同的 log 防零项
 AUDIO_EXTS = {'.flac', '.wav', '.mp3', '.m4a', '.ogg',
               '.ape', '.wma', '.aac', '.opus'}
 
+# 频谱概要对数频率网格（20Hz–24kHz，256 档；仅可视化用，与判定无关）。
+# 网格是全曲库共享的常量，因此结果里只需存每档的 dB 值。
+SPECTRUM_POINTS = 256
+_SPECTRUM_F_MIN, _SPECTRUM_F_MAX = 20.0, 24000.0
+_SPECTRUM_GRID_CACHE: dict = {}
+
+
+def spectrum_grid(points: int = SPECTRUM_POINTS) -> np.ndarray:
+    """对数频率分档左边界（含虚拟右端共 points+1 个），模块级缓存"""
+    cached = _SPECTRUM_GRID_CACHE.get(points)
+    if cached is None:
+        lo = math.log10(_SPECTRUM_F_MIN)
+        hi = math.log10(_SPECTRUM_F_MAX)
+        cached = np.logspace(lo, hi, points + 1)
+        _SPECTRUM_GRID_CACHE[points] = cached
+    return cached
+
+
+def decode_spectrum_summary(data: bytes) -> np.ndarray:
+    """字节串 → float32 dB 数组（渲染侧用）；空数据返回空数组"""
+    if not data:
+        return np.array([], dtype=np.float32)
+    return np.frombuffer(data, dtype='<f4')
+
 
 class ScanCancelled(Exception):
     """协作式取消：worker 在阶段边界或转码轮询中检测到取消标志时抛出"""
@@ -359,6 +383,28 @@ class AudioAnalyzer:
         self._spectrum = (freqs, db)
         return self._spectrum
 
+    def compute_spectrum_summary(self, points: int = SPECTRUM_POINTS) -> bytes:
+        """频谱概要：对数频率分档取每档 dB 最大值，返回 float32 字节串。
+
+        仅用于可视化（详情/对比对话框与 HTML 报告），不参与任何判定与
+        评分。分档网格是模块常量（全曲库一致），结果里只存 dB 值——
+        256 点 float32 约 1KB/文件，禁止用 Python list 存浮点（对象
+        开销会放大内存一个数量级）。"""
+        freqs, db = self.compute_fft_spectrum()
+        if len(freqs) == 0:
+            return b''
+        grid = spectrum_grid(points)
+        # searchsorted 分档：bin i 覆盖 [grid[i], grid[i+1])
+        idx = np.searchsorted(freqs, grid, side='right') - 1
+        idx = np.clip(idx, 0, len(db) - 1)
+        out = np.full(points, -120.0, dtype=np.float32)
+        for i in range(points):
+            lo = int(idx[i])
+            hi = int(idx[i + 1]) if i + 1 < points else len(db)
+            if hi > lo:
+                out[i] = np.max(db[lo:hi])
+        return out.tobytes()
+
     def compute_fft_cutoff(self, threshold_db: float = -60) -> float:
         freqs, db = self.compute_fft_spectrum()
         if len(freqs) == 0:  # 坑1：numpy 数组不做布尔判断
@@ -495,6 +541,9 @@ class AudioAnalyzer:
             'peak': peak,
             'fake_lossless': fake_lossless,
             'fake_reasons': fake_reasons,
+            # v1.3.0 可视化附加字段：256 点对数分档 dB 概要（float32 字节串），
+            # 不参与判定/评分（dev/compare_new_vs_legacy.py 全字段比对须排除）
+            'spectrum': self.compute_spectrum_summary(),
         }
 
     def cleanup(self) -> None:
