@@ -14,5 +14,6 @@ PyQt6-Qt6==6.11.1
 PyQt6_sip==13.11.1
 python-pptx==1.0.2
 pywin32-ctypes==0.2.3
+PyYAML==6.0.3
 typing_extensions==4.16.0
 xlsxwriter==3.2.9
