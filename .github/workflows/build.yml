@@ -54,12 +54,13 @@ jobs:
           --name SonicCheck --icon resources/icon.ico
           --add-data "resources;resources" --exclude-module tests main.py
 
-      - name: 提取版本号
+      - name: 提取版本号（从源码读，tag 推送与 dispatch 通用）
         id: ver
         shell: pwsh
+        env:
+          PYTHONIOENCODING: utf-8
         run: |
-          $tag = '${{ github.ref_name }}'
-          $ver = $tag -replace '^v', ''
+          $ver = python -c "import re; print(re.search(r'APP_VERSION = \"([^\"]+)\"', open('main_window.py', encoding='utf-8').read()).group(1))"
           "version=$ver" | Out-File -Append $env:GITHUB_OUTPUT
 
       - name: 压缩 zip
@@ -84,11 +85,11 @@ jobs:
             ConvertFrom-Json | Where-Object { $_.draft -and $_.tag_name -eq $tagLabel } |
             Select-Object -First 1
           if (-not $draft) {
-            gh release create $tagLabel --draft --title "CI build $tag" `
-              --notes "CI 自动构建（双轨对照用），勿直接发布；正式包见人工发布条目" | Out-Null
-            $draft = gh api "repos/${{ github.repository }}/releases?per_page=20" |
-              ConvertFrom-Json | Where-Object { $_.draft -and $_.tag_name -eq $tagLabel } |
-              Select-Object -First 1
+            $url = gh release create $tagLabel --draft --title "CI build $tag" `
+              --notes "CI 自动构建（双轨对照用），勿直接发布；正式包见人工发布条目"
+            $draftId = ($url -split '/')[-1]
+          } else {
+            $draftId = $draft.id
           }
           gh release upload $tagLabel "$assetName" --clobber
-          Write-Host "CI 草稿已就绪: release id=$($draft.id) asset=$assetName"
+          Write-Host "CI 草稿已就绪: release id=$draftId asset=$assetName"
