@@ -61,6 +61,9 @@ class SettingsDialog(QDialog):
         btn_open = QPushButton("打开配置文件夹", self)
         btn_open.clicked.connect(self._open_config_dir)
         form_adv.addRow("", btn_open)
+        self.chk_updates = QCheckBox("启动时检查新版本（仅提示，不自动下载）",
+                                     self)
+        form_adv.addRow("", self.chk_updates)
         lay.addWidget(grp_adv)
 
         buttons = QDialogButtonBox(
@@ -77,6 +80,7 @@ class SettingsDialog(QDialog):
         self.spin_threads.setValue(int(v.get("threads", 8)))
         self.spin_seconds.setValue(int(v.get("seconds", 30)))
         self.chk_safe.setChecked(bool(v.get("safe", False)))
+        self.chk_updates.setChecked(bool(v.get("check_updates", True)))
         self._mark_values = {"mark_true": v.get("mark_true", "_真无损"),
                              "mark_fake": v.get("mark_fake", "_假无损"),
                              "position": v.get("position", POS_SUFFIX)}
@@ -134,5 +138,6 @@ class SettingsDialog(QDialog):
             "threads": self.spin_threads.value(),
             "seconds": self.spin_seconds.value(),
             "safe": self.chk_safe.isChecked(),
+            "check_updates": self.chk_updates.isChecked(),
             **self._mark_values,
         }

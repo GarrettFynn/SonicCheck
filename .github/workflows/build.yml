@@ -24,11 +24,15 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt -r requirements-dev.txt
 
-      - name: 下载 ffmpeg full（钉版本 + sha256 校验）
+      - name: 下载 ffmpeg full（钉版本 + 体积校验）
         shell: pwsh
         run: |
           $url = 'https://www.gyan.dev/ffmpeg/builds/packages/ffmpeg-9.0.2-full_build.7z'
           Invoke-WebRequest -Uri $url -OutFile ffmpeg.7z
+          $min = 150MB   # 完整包体积下限（版本漂移/截断下载防线；gyan 未发布固定 sha256）
+          if ((Get-Item ffmpeg.7z).Length -lt $min) {
+            throw "ffmpeg 包体积异常，疑似下载不完整"
+          }
           # 7z 解包（runner 自带）
           7z x ffmpeg.7z -offx | Out-Null
           New-Item -ItemType Directory -Force resources\ffmpeg | Out-Null

@@ -298,6 +298,8 @@ class FileOpsController(QObject):
                 "settings/marks/fake", "_假无损"),
             "position": mw._settings.value(
                 "settings/marks/position", POS_SUFFIX),
+            "check_updates": mw._settings.value(
+                "settings/check_updates", True, type=bool),
         }
         dialog = SettingsDialog(current, mw)
         if dialog.exec() != SettingsDialog.DialogCode.Accepted:
@@ -311,6 +313,8 @@ class FileOpsController(QObject):
         mw._settings.setValue("settings/marks/true", v["mark_true"])
         mw._settings.setValue("settings/marks/fake", v["mark_fake"])
         mw._settings.setValue("settings/marks/position", v["position"])
+        mw._settings.setValue("settings/check_updates",
+                              v["check_updates"])
         pos_text = "后缀" if v["position"] == "suffix" else "前缀"
         mw.log_panel.log(
             f"设置已更新: 线程 {v['threads']}，分析 {v['seconds']} 秒，"
