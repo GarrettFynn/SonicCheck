@@ -8,6 +8,7 @@ STATUS_PENDING = "pending"
 STATUS_ANALYZING = "analyzing"
 STATUS_DONE = "done"
 STATUS_ERROR = "error"
+STATUS_CANCELLED = "cancelled"   # v2.0：扫描停止后的未完结行（数据层状态）
 
 
 @dataclass
