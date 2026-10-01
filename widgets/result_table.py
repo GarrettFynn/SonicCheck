@@ -29,6 +29,7 @@ FILTER_FAKE = "只看假无损"
 
 class ResultTable(QWidget):
     export_clicked = pyqtSignal()
+    report_clicked = pyqtSignal()       # V13-5：HTML 报告
     rename_clicked = pyqtSignal()
     compare_clicked = pyqtSignal()      # B：同名对比
     dedupe_clicked = pyqtSignal()       # C：去重清除
@@ -66,14 +67,20 @@ class ResultTable(QWidget):
         bar.addStretch(1)
         self.btn_export = QPushButton("导出CSV", self)
         self.btn_export.setEnabled(False)   # M3 启用
+        self.btn_report = QPushButton("导出报告(HTML)", self)
+        self.btn_report.setEnabled(False)   # V13-5：有结果后启用
+        self.btn_report.setToolTip(
+            "生成单文件 HTML 报告（汇总+明细+假无损证据卡），可直接发送")
         self.btn_rename = QPushButton("一键重命名", self)
         self.btn_rename.setEnabled(False)   # M3 启用
         bar.addWidget(self.btn_export)
+        bar.addWidget(self.btn_report)
         bar.addWidget(self.btn_rename)
         lay.addLayout(bar)
 
         # 按钮 → 对外信号（M1 遗留修复：占位期未接，M3 启用后必须接）
         self.btn_export.clicked.connect(self.export_clicked)
+        self.btn_report.clicked.connect(self.report_clicked)
         self.btn_rename.clicked.connect(self.rename_clicked)
 
         # ---- 工具栏第二排（M4.5 新功能入口） ----
@@ -376,6 +383,7 @@ class ResultTable(QWidget):
 
     def set_actions_enabled(self, enabled: bool) -> None:
         self.btn_export.setEnabled(enabled)
+        self.btn_report.setEnabled(enabled)
         self.btn_rename.setEnabled(enabled)
         self.btn_compare.setEnabled(enabled)
         self.btn_dedupe.setEnabled(enabled)

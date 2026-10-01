@@ -3,6 +3,7 @@
 """主窗口：三栏布局（左栏 + 右侧主面板 + 底部日志）、整窗拖拽、状态记忆"""
 
 import sys
+from datetime import datetime
 from pathlib import Path
 
 from PyQt6.QtCore import QSettings, Qt
@@ -18,6 +19,7 @@ from core.deduper import (CLEAR_DIR_NAME, build_clear_plan,
                           find_duplicate_groups, prune_restore_map,
                           record_restore_map, load_restore_map)
 from core.ffmpeg_locator import find_ffmpeg, find_ffprobe
+from core.html_report import export_html_report
 from core.playlist import copy_matched
 from core.quality_marks import set_config as set_mark_config
 from core.renamer import (KIND_AUDIO, build_rename_plan, execute_copy_plan,
@@ -187,6 +189,7 @@ class MainWindow(QMainWindow):
         lp.unlock_clicked.connect(self.on_unlock)
         lp.chk_safe.toggled.connect(self._on_safe_toggled)
         self.result_table.export_clicked.connect(self.on_export_csv)
+        self.result_table.report_clicked.connect(self.on_report)
         self.result_table.rename_clicked.connect(self.on_rename)
         self.result_table.compare_clicked.connect(self.on_compare)
         self.result_table.dedupe_clicked.connect(self.on_dedupe)
@@ -584,6 +587,30 @@ class MainWindow(QMainWindow):
             self.log_panel.log_error(f"CSV 导出失败: {exc}")
             return
         self.log_panel.log(f"CSV 已导出（{rows} 行）: {path}")
+
+    def on_report(self) -> None:
+        """V13-5：导出 HTML 报告（决策点②：默认仅假无损出证据卡）"""
+        items = self._pick_scope("导出报告", allow_fake_filter=True,
+                                 allow_true_filter=True)
+        if not items:
+            if items is not None:
+                self.log_panel.log("所选范围没有文件")
+            return
+        if not any(i.status == STATUS_DONE for i in items):
+            self.log_panel.log("所选范围没有可导出的分析结果")
+            return
+        default = str(Path(self._current_folder or str(Path.home()))
+                      / f"SonicCheck报告_{datetime.now():%Y%m%d_%H%M}.html")
+        path, _ = QFileDialog.getSaveFileName(
+            self, "导出 HTML 报告", default, "HTML 文件 (*.html)")
+        if not path:
+            return
+        try:
+            rows = export_html_report(items, self._current_folder, path)
+        except OSError as exc:
+            self.log_panel.log_error(f"HTML 报告导出失败: {exc}")
+            return
+        self.log_panel.log(f"HTML 报告已导出（{rows} 行）: {path}")
 
     def on_rename(self) -> None:
         items = self._pick_scope("一键重命名")
