@@ -203,6 +203,10 @@ class MainWindow(QMainWindow):
             self.restoreGeometry(geo)
         self.left_panel.chk_safe.setChecked(
             self._settings.value("safe/enabled", False, type=bool))
+        # V13-3：恢复列宽/排序状态（QByteArray）
+        header_state = self._settings.value("table/header_state")
+        if header_state:
+            self.result_table.restore_header_state(header_state)
         last = self._settings.value("last_folder", "")
         if last and Path(last).is_dir():
             self.set_folder(last)
@@ -210,6 +214,9 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event: QCloseEvent) -> None:
         self._settings.setValue("window_geometry", self.saveGeometry())
+        # V13-3：保存列宽/排序状态
+        self._settings.setValue("table/header_state",
+                                self.result_table.save_header_state())
         # M2：退出前先停止线程池（协作式取消），再关闭窗口
         if self._scan_manager.is_running:
             self._scan_manager.stop()

@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""结果表格：工具栏（筛选/导出CSV/一键重命名）+ 五列结果表"""
+"""结果表格：工具栏（筛选/搜索/导出CSV/一键重命名）+ 五列结果表"""
 
-from PyQt6.QtCore import Qt, pyqtSignal
+from pathlib import Path
+
+from PyQt6.QtCore import QTimer, Qt, pyqtSignal
 from PyQt6.QtGui import QColor
 from PyQt6.QtWidgets import (QComboBox, QHBoxLayout, QHeaderView, QLabel,
-                             QPushButton, QTableWidget, QTableWidgetItem,
-                             QVBoxLayout, QWidget)
+                             QLineEdit, QPushButton, QTableWidget,
+                             QTableWidgetItem, QVBoxLayout, QWidget)
 
 from models.result_item import (STATUS_ANALYZING, STATUS_DONE, STATUS_ERROR,
                                 ResultItem)
@@ -48,6 +50,19 @@ class ResultTable(QWidget):
         self.combo_filter = QComboBox(self)
         self.combo_filter.addItems([FILTER_ALL, FILTER_TRUE, FILTER_FAKE])
         bar.addWidget(self.combo_filter)
+        # V13-3：文本搜索（文件名/歌名/歌手标签子串，与真假筛选叠加）
+        self.edit_search = QLineEdit(self)
+        self.edit_search.setPlaceholderText("搜索文件名/歌名/歌手…")
+        self.edit_search.setClearButtonEnabled(True)
+        self.edit_search.setMaximumWidth(240)
+        bar.addWidget(self.edit_search, 1)
+        self._search_timer = QTimer(self)
+        self._search_timer.setSingleShot(True)
+        self._search_timer.setInterval(300)  # 防抖：万行表全遍历不宜每击键
+        self._search_timer.timeout.connect(
+            lambda: self.apply_filter(self.combo_filter.currentText()))
+        self.edit_search.textChanged.connect(
+            lambda: self._search_timer.start())
         bar.addStretch(1)
         self.btn_export = QPushButton("导出CSV", self)
         self.btn_export.setEnabled(False)   # M3 启用
@@ -111,6 +126,8 @@ class ResultTable(QWidget):
         # 批量模式状态：扫描期间排序/过滤统一推迟到 end_update（B1）
         self._batch = False
         self._row_by_path: dict = {}   # 批量期间 filepath → 行号（行序稳定）
+        # V13-3：filepath → meta（搜索用标签歌名/歌手），add_row 时维护
+        self._meta_of_row: dict = {}
 
     def _on_cell_double_clicked(self, row: int, _col: int) -> None:
         cell = self.table.item(row, 0)
@@ -155,6 +172,7 @@ class ResultTable(QWidget):
         name_item.setToolTip(item.filepath)
         name_item.setData(PATH_ROLE, item.filepath)
         self.table.setItem(row, 0, name_item)
+        self._meta_of_row[item.filepath] = item.detail.get('meta', {})
 
         self._set_num(row, 1, round(item.score, 1))
         self._set_num(row, 2, int(round(item.cutoff_60db)))
@@ -254,7 +272,17 @@ class ResultTable(QWidget):
 
     def clear_rows(self) -> None:
         self._row_by_path.clear()
+        self._meta_of_row.clear()
         self.table.setRowCount(0)
+
+    # ---------------- 列宽/排序状态记忆（V13-3） ----------------
+    def save_header_state(self) -> bytes:
+        return self.table.horizontalHeader().saveState()
+
+    def restore_header_state(self, state: bytes) -> bool:
+        if not state:
+            return False
+        return self.table.horizontalHeader().restoreState(state)
 
     # ---------------- 选中行 / 右键菜单（M4.6） ----------------
     def selected_paths(self) -> list:
@@ -300,23 +328,51 @@ class ResultTable(QWidget):
         act_copy = menu.addAction(
             f"复制完整路径（{len(paths)} 条）" if len(paths) > 1
             else "复制完整路径")
+        # V13-3：按右键首行的标签/扩展名快速筛选
+        act_artist = act_fmt = None
+        first_path = paths[0]
+        meta = self._meta_of_row.get(first_path, {})
+        artist = (meta.get('artist') or '').strip()
+        if artist:
+            act_artist = menu.addAction(f"只看此歌手: {artist[:16]}")
+        ext = Path(first_path).suffix.lower().lstrip('.')
+        if ext:
+            act_fmt = menu.addAction(f"只看此格式: {ext.upper()}")
         chosen = menu.exec(self.table.viewport().mapToGlobal(pos))
         if chosen is act_open:
             import os
-            from pathlib import Path as _P
-            os.startfile(str(_P(paths[0]).parent))  # noqa: 仅 Windows 产品形态
+            os.startfile(str(Path(paths[0]).parent))  # noqa: 仅 Windows 产品形态
         elif chosen is act_copy:
             from PyQt6.QtWidgets import QApplication
             QApplication.clipboard().setText("\n".join(paths))
+        elif chosen is act_artist and artist:
+            self.edit_search.setText(artist)
+        elif chosen is act_fmt and ext:
+            self.edit_search.setText(f".{ext}")
 
-    # ---------------- 筛选（P1） ----------------
+    # ---------------- 筛选（P1；V13-3 扩展文本搜索） ----------------
     def apply_filter(self, text: str) -> None:
+        needle = self.edit_search.text().strip().lower()
         for row in range(self.table.rowCount()):
             cell = self.table.item(row, 4)
             kind = cell.data(Qt.ItemDataRole.UserRole) if cell else None
             hide = ((text == FILTER_TRUE and kind != "true")
                     or (text == FILTER_FAKE and kind != "fake"))
+            if not hide and needle:
+                hide = not self._row_matches_search(row, needle)
             self.table.setRowHidden(row, hide)
+
+    def _row_matches_search(self, row: int, needle: str) -> bool:
+        """文件名（含完整路径）/标签歌名/歌手任一子串命中"""
+        name_cell = self.table.item(row, 0)
+        if name_cell:
+            if needle in name_cell.text().lower():
+                return True
+            meta = self._meta_of_row.get(name_cell.data(PATH_ROLE) or '', {})
+            hay = f"{meta.get('title', '')} {meta.get('artist', '')}".lower()
+            if needle in hay:
+                return True
+        return False
 
     def set_actions_enabled(self, enabled: bool) -> None:
         self.btn_export.setEnabled(enabled)
