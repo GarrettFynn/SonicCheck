@@ -21,7 +21,7 @@ from core.deduper import (CLEAR_DIR_NAME, build_clear_plan,
 from core.ffmpeg_locator import find_ffmpeg, find_ffprobe
 from core.html_report import export_html_report
 from core.playlist import copy_matched
-from core.quality_marks import set_config as set_mark_config
+from core.quality_marks import POS_SUFFIX, set_config as set_mark_config
 from core.renamer import (KIND_AUDIO, build_rename_plan, execute_copy_plan,
                           execute_plan)
 from core.scanner import find_audio_files
