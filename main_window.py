@@ -99,6 +99,7 @@ class MainWindow(QMainWindow):
         self._settings = QSettings()
         self._current_folder = ""
         self._results = {}  # filepath -> ResultItem（M3 导出/重命名的数据源）
+        self._fp_dlg = None  # V14-2b：声纹采集进度对话框（QProgressDialog）
 
         self._migrate_settings()  # V13-2：旧键一次性迁入 settings/
         self._load_marks_config()
@@ -753,22 +754,41 @@ class MainWindow(QMainWindow):
             self)
         self._fp_dlg.setWindowModality(Qt.WindowModality.WindowModal)
         self._fp_dlg.setMinimumDuration(0)
+        # 关掉 auto 行为：value 到 max 时 autoClose/autoReset 也会发
+        # canceled，会把取消标志误置位（正常完成被当作用户取消）；
+        # 完成收尾在 _on_fp_done 手动关窗
+        self._fp_dlg.setAutoReset(False)
+        self._fp_dlg.setAutoClose(False)
         self._fp_dlg.canceled.connect(self._fp_cancel.set)
         worker = _FingerprintWorker(paths, self._fp_cancel)
         worker.signals.progress.connect(self._on_fp_progress)
-        worker.signals.done.connect(lambda fps: self._on_fp_done(fps))
+        # 必须绑 method：lambda 无接收者对象，auto connection 退化为
+        # Direct（槽在 worker 线程执行），与主线程 progress 槽竞态
+        worker.signals.done.connect(self._on_fp_done)
         QThreadPool.globalInstance().start(worker)
 
     def _on_fp_progress(self, done: int, total: int) -> None:
-        if getattr(self, '_fp_dlg', None) is not None:
-            self._fp_dlg.setValue(done)
-            self._fp_dlg.setLabelText(
-                f"正在计算声纹指纹（{done}/{total}）…")
+        # QProgressDialog.setValue() 内部会 processEvents（Qt 文档行为），
+        # value 到 max 时 autoClose 并可能重入处理 done 事件（把 _fp_dlg
+        # 置 None）——全程用局部引用，setValue 后必须复查
+        dlg = self._fp_dlg
+        if dlg is None:
+            return
+        dlg.setLabelText(f"正在计算声纹指纹（{done}/{total}）…")
+        dlg.setValue(done)
+        if self._fp_dlg is not dlg:
+            return   # setValue 重入期间批次已收尾
 
     def _on_fp_done(self, fps: dict) -> None:
-        if getattr(self, '_fp_dlg', None) is not None:
-            self._fp_dlg.close()
-            self._fp_dlg = None
+        dlg, self._fp_dlg = self._fp_dlg, None
+        if dlg is not None:
+            # close() 会触发 canceled 信号（QDialog closeEvent→cancel
+            # 链路），必须先断开，否则正常完成被误判为用户取消
+            try:
+                dlg.canceled.disconnect(self._fp_cancel.set)
+            except TypeError:
+                pass
+            dlg.close()
         if self._fp_cancel.is_set():
             self.log_panel.log("声纹比对已取消，未执行去重")
             return

@@ -185,6 +185,10 @@ def candidate_pairs(fingerprints: dict) -> list:
         files = np.unique(owner[s:e])
         if len(files) < 2 or len(files) > WORD_COMMON_CAP:
             continue   # 唯一字无对；超高频字（静音类）剔除
+        # 语义＝共享"不同字"数（每字组每对 +1）：静音等重复字在两首
+        # 不同歌里也同形，若按出现次数累计会误当共享证据；真实音乐
+        # 重叠 40s ≈ 300 个不同字，门槛 8 余量充足。退化指纹（几乎
+        # 全是同一个字，如静音文件）不同字数 < 门槛 → 正确拒绝。
         for i in range(len(files)):
             for j in range(i + 1, len(files)):
                 key = (int(files[i]), int(files[j]))

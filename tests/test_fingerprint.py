@@ -120,6 +120,12 @@ def main():
     check('仅高频字共享不成候选（静音剔除）',
           frozenset(('d', 'e')) not in pairs)
     check('短指纹不参与', not any('f' in p for p in pairs))
+    # 退化用例：全相同字（静音型文件）——不同字数 1 < 门槛 → 正确拒绝
+    fpg = b'\x11\x00\x00\x00' * 500
+    fph = b'\x11\x00\x00\x00' * 500
+    pairs2 = {frozenset(p) for p in F.candidate_pairs({'g': fpg, 'h': fph})}
+    check('全相同字退化指纹不成候选（宁漏勿错）',
+          frozenset(('g', 'h')) not in pairs2)
 
     print("4. 完整比对")
     matches = F.fingerprint_matches(
