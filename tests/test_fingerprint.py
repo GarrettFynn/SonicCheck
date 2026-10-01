@@ -29,6 +29,21 @@ PASS = []
 SR = 44100
 
 
+def _has_chromaprint() -> bool:
+    """CI 的 choco ffmpeg 与 essentials 版不带 chromaprint muxer——
+    能力缺失时本套件跳过（指纹功能随发布的 full 版内置 ffmpeg 提供）"""
+    ff = find_ffmpeg()
+    if not ff:
+        return False
+    try:
+        out = subprocess.run(
+            [ff, '-hide_banner', '-h', 'muxer=chromaprint'],
+            capture_output=True, text=True, timeout=30)
+        return out.returncode == 0 and 'Chromaprint' in out.stdout
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+
+
 def check(name, cond, extra=""):
     cond = bool(cond)
     PASS.append((name, cond))
@@ -65,6 +80,10 @@ def main():
     if not FF:
         print("未找到 ffmpeg，跳过")
         sys.exit(1)
+    if not _has_chromaprint():
+        print("当前 ffmpeg 不含 chromaprint muxer（essentials/choco 版），"
+              "指纹套件跳过——完整能力随发布版内置 full 版 ffmpeg 提供")
+        sys.exit(0)
 
     print("1. 距离口径（旋律级合成样本）")
     base = melody(str(tmp / 'base.wav'), [440, 494, 523, 587, 659], 1)
