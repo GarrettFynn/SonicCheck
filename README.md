@@ -48,6 +48,8 @@ python main.py
   - 24bit 但 DR < 4（位深造假）
 - **批量扫描**：递归扫描子文件夹，多线程并发（QThreadPool），默认 8 线程可调
 - **协作式取消**：扫描中可随时停止，不残留临时文件
+- **扫描中可排序/筛选**（v2.0 Model/View 架构）：2 万行插入约 1 秒、
+  排序点击即时响应
 
 ### 曲库管理
 
@@ -134,6 +136,7 @@ python main.py
 - [x] M7 v1.2.0 性能与打磨：表格批量渲染、并行解锁、QQ 密钥安全加固、网易云/解锁窗口后台化、歌单解析三修、文件名安全
 - [x] M8 v1.3.0 可视化与体验：频谱图（详情/对比/HTML 报告证据卡）、统一设置面板、表格搜索与状态记忆、最近文件夹
 - [x] M9 v1.4.0 引擎能力：chromaprint 声纹指纹去重（改名/变体识别）、疑似升频提示、CLI 无头模式
+- [x] M10 v2.0.0 架构：表格 Model/View（扫描中可排序、2 万行流畅）、主窗口拆分控制器、CI 自动打包挂草稿、启动更新检查
 
 ---
 
@@ -141,20 +144,23 @@ python main.py
 
 ```
 SonicCheck/
-├── main.py              # 入口
-├── main_window.py       # 主窗口（布局、拖拽、状态记忆、写操作调度）
-├── widgets/             # 左栏 / 结果表格 / 进度 / 汇总 / 日志 / 各对话框
+├── main.py              # 入口（GUI + CLI 无头模式）
+├── main_window.py       # 主窗口（布局、信号接线、状态记忆、转发）
+├── app_controllers.py   # 业务控制器（扫描链 / 文件操作链，v2.0）
+├── widgets/             # 左栏 / 结果表格(Model/View) / 进度 / 汇总 / 日志 / 对话框
 ├── core/                # 分析引擎、ffmpeg 封装、扫描、重命名、去重、歌单、质量标记
 │   ├── analyzer.py      # 音频分析引擎（numpy 向量化版）
 │   ├── scanner.py       # 文件扫描器（递归、容错）
-│   ├── deduper.py       # 去重引擎（并查集内容签名）
+│   ├── deduper.py       # 去重引擎（并查集：标签+签名+声纹三路）
+│   ├── fingerprint.py   # chromaprint 声纹采集与比对（v1.4）
 │   ├── playlist.py      # 歌单解析与匹配
 │   ├── renamer.py       # 智能重命名
 │   ├── tag_renamer.py   # 标签改名
 │   ├── csv_exporter.py  # CSV 导出
-│   ├── quality_marks.py # 质量标记配置
+│   ├── html_report.py   # HTML 证据报告（v1.3）
 │   ├── unlock.py        # 加密格式解锁（NCM/QMC 流式解密）
 │   ├── qqmusic_key.py   # QQ 音乐密钥获取与本地密钥库
+│   ├── update_check.py  # 启动更新检查（v2.0）
 │   ├── fsutil.py        # 文件系统小工具（lrc 伴随文件等）
 │   └── ffmpeg_locator.py# ffmpeg 自动查找
 ├── models/              # ResultItem 数据模型
