@@ -114,6 +114,7 @@ class CompareDialog(QDialog):
         keep = g.keep
         self.hint.setText(
             f"组「{g.label}」共 {len(files)} 个文件，按评分降序"
+            + (f"；{g.fp_note}" if getattr(g, 'fp_note', '') else "")
             + ("；绿色为保留项，点击「处置」行可改" if self._mode == MODE_DEDUPE
                else ""))
 

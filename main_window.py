@@ -3,14 +3,17 @@
 """主窗口：三栏布局（左栏 + 右侧主面板 + 底部日志）、整窗拖拽、状态记忆"""
 
 import sys
+import threading
 from datetime import datetime
 from pathlib import Path
 
-from PyQt6.QtCore import QSettings, Qt
+from PyQt6.QtCore import QObject, QRunnable, QSettings, Qt, QThreadPool, \
+    pyqtSignal
 from PyQt6.QtGui import QCloseEvent, QDragEnterEvent, QDropEvent, QIcon
-from PyQt6.QtWidgets import (QFileDialog, QFrame, QHBoxLayout, QInputDialog,
-                             QLabel, QMainWindow, QMessageBox, QPushButton,
-                             QVBoxLayout, QWidget)
+from PyQt6.QtWidgets import (QCheckBox, QDialog, QFileDialog, QFrame,
+                             QHBoxLayout, QInputDialog,
+                             QLabel, QMainWindow, QMessageBox, QProgressDialog,
+                             QPushButton, QVBoxLayout, QWidget)
 
 from core.analyzer import AudioAnalyzer
 from core.csv_exporter import default_csv_name, export_csv
@@ -19,6 +22,7 @@ from core.deduper import (CLEAR_DIR_NAME, build_clear_plan,
                           find_duplicate_groups, prune_restore_map,
                           record_restore_map, load_restore_map)
 from core.ffmpeg_locator import find_ffmpeg, find_ffprobe
+from core.fingerprint import fingerprint_file
 from core.html_report import export_html_report
 from core.playlist import copy_matched
 from core.quality_marks import POS_SUFFIX, set_config as set_mark_config
@@ -49,6 +53,31 @@ ORG_NAME = "SonicCheck"
 
 DEFAULT_W, DEFAULT_H = 1200, 800
 MIN_W, MIN_H = 900, 600
+
+
+class _FpSignals(QObject):
+    progress = pyqtSignal(int, int)
+    done = pyqtSignal(dict)
+
+
+class _FingerprintWorker(QRunnable):
+    """后台批量计算 chromaprint 指纹（V14-2b：去重可选声纹比对）"""
+
+    def __init__(self, paths: list, cancel: threading.Event):
+        super().__init__()
+        self.paths = paths
+        self.cancel = cancel
+        self.signals = _FpSignals()
+
+    def run(self) -> None:
+        fps = {}
+        total = len(self.paths)
+        for i, p in enumerate(self.paths):
+            if self.cancel.is_set():
+                break
+            fps[p] = fingerprint_file(p, cancel_check=self.cancel.is_set)
+            self.signals.progress.emit(i + 1, total)
+        self.signals.done.emit(fps)
 
 
 def resource_path(rel: str) -> str:
@@ -687,10 +716,73 @@ class MainWindow(QMainWindow):
         CompareDialog(groups, MODE_COMPARE, self).exec()
 
     def on_dedupe(self) -> None:
-        """功能 C：去重清除（C1 移到 _待清除/，可恢复；安全模式=仅索引清除）"""
-        groups = find_duplicate_groups(list(self._results.values()))
+        """功能 C：去重清除（C1 移到 _待清除/，可恢复；安全模式=仅索引清除）
+
+        V14-2b：可选声纹指纹比对——先询问，勾选则后台采集指纹（进度
+        可取消）后进入第三路并查；否则与 v1.3.0 行为一致。
+        """
+        done_items = [i for i in self._results.values()
+                      if i.status == STATUS_DONE]
+        if len(done_items) < 2:
+            self.log_panel.log("可分析的完整结果不足 2 个，无重复可查")
+            return
+
+        box = QMessageBox(self)
+        box.setWindowTitle("去重清除")
+        box.setText("去重前可选：启用声纹指纹比对")
+        box.setInformativeText(
+            "对已扫描的文件计算声纹指纹后再分组，可发现改名、不同音质、\n"
+            "live/录音室变体等「签名不同但同一演奏」的重复。计算较耗时"
+            "（每首约 0.5~2 秒），可随时取消。")
+        chk_fp = QCheckBox("启用声纹比对", box)
+        box.setCheckBox(chk_fp)
+        btn_dedupe = box.addButton("开始去重",
+                                   QMessageBox.ButtonRole.AcceptRole)
+        box.addButton("取消", QMessageBox.ButtonRole.RejectRole)
+        box.exec()
+        if box.clickedButton() is not btn_dedupe:
+            return
+        if not chk_fp.isChecked():
+            self._run_dedupe(None)
+            return
+
+        paths = [i.filepath for i in done_items]
+        self._fp_cancel = threading.Event()
+        self._fp_dlg = QProgressDialog(
+            f"正在计算声纹指纹（0/{len(paths)}）…", "取消", 0, len(paths),
+            self)
+        self._fp_dlg.setWindowModality(Qt.WindowModality.WindowModal)
+        self._fp_dlg.setMinimumDuration(0)
+        self._fp_dlg.canceled.connect(self._fp_cancel.set)
+        worker = _FingerprintWorker(paths, self._fp_cancel)
+        worker.signals.progress.connect(self._on_fp_progress)
+        worker.signals.done.connect(lambda fps: self._on_fp_done(fps))
+        QThreadPool.globalInstance().start(worker)
+
+    def _on_fp_progress(self, done: int, total: int) -> None:
+        if getattr(self, '_fp_dlg', None) is not None:
+            self._fp_dlg.setValue(done)
+            self._fp_dlg.setLabelText(
+                f"正在计算声纹指纹（{done}/{total}）…")
+
+    def _on_fp_done(self, fps: dict) -> None:
+        if getattr(self, '_fp_dlg', None) is not None:
+            self._fp_dlg.close()
+            self._fp_dlg = None
+        if self._fp_cancel.is_set():
+            self.log_panel.log("声纹比对已取消，未执行去重")
+            return
+        got = sum(1 for v in fps.values() if v)
+        self.log_panel.log(f"指纹计算完成：{got}/{len(fps)} 首，开始声纹去重")
+        self._run_dedupe(fps)
+
+    def _run_dedupe(self, fingerprints: dict) -> None:
+        """去重主流程（V14-2b 从 on_dedupe 拆出，fingerprints 可为 None）"""
+        groups = find_duplicate_groups(list(self._results.values()),
+                                       fingerprints=fingerprints)
         if not groups:
-            self.log_panel.log("未发现同名或同内容的重复文件")
+            self.log_panel.log(
+                "未发现同名、同内容或声纹相似的重复文件")
             return
         dialog = CompareDialog(groups, MODE_DEDUPE, self)
         if dialog.exec() != CompareDialog.DialogCode.Accepted:
