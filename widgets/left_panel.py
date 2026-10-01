@@ -7,7 +7,8 @@ from pathlib import Path
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QDragEnterEvent, QDropEvent
 from PyQt6.QtWidgets import (QCheckBox, QFrame, QHBoxLayout, QLabel,
-                             QPushButton, QSpinBox, QVBoxLayout, QWidget)
+                             QMenu, QPushButton, QSpinBox, QToolButton,
+                             QVBoxLayout, QWidget)
 
 PANEL_WIDTH = 220
 DEFAULT_THREADS = 8   # ⑦-5：默认保守 8，上限 16
@@ -74,7 +75,17 @@ class LeftPanel(QFrame):
         self.drop_area = DropArea(self)
         self.folder_label = QLabel("未选择", self)
         self.folder_label.setObjectName("FolderLabel")
-        lay.addWidget(self.btn_select)
+        # V13-4：最近文件夹下拉（最多 5 个，去重，最新在前）
+        self.btn_recent = QToolButton(self)
+        self.btn_recent.setText("最近 ▾")
+        self.btn_recent.setPopupMode(QToolButton.ToolButtonPopupMode
+                                     .InstantPopup)
+        self.btn_recent.setToolTip("最近使用过的文件夹")
+        self.btn_recent.setEnabled(False)
+        row_src = QHBoxLayout()
+        row_src.addWidget(self.btn_select, 1)
+        row_src.addWidget(self.btn_recent)
+        lay.addLayout(row_src)
         lay.addWidget(self.drop_area)
         lay.addWidget(self.folder_label)
 
@@ -165,10 +176,26 @@ class LeftPanel(QFrame):
             fm.elidedText(path, Qt.TextElideMode.ElideMiddle, width))
         self.folder_label.setToolTip(path)
 
+    # ---------------- 最近文件夹（V13-4） ----------------
+    def set_recent_folders(self, folders: list) -> None:
+        """重建「最近 ▾」菜单；空列表时按钮禁用"""
+        menu = QMenu(self.btn_recent)
+        for f in folders:
+            act = menu.addAction(f)
+            act.setToolTip(f)
+            act.triggered.connect(lambda _=False, path=f: self._pick_recent(path))
+        self.btn_recent.setMenu(menu)
+        self.btn_recent.setEnabled(bool(folders))
+
+    def _pick_recent(self, path: str) -> None:
+        self.folder_dropped.emit(path)   # 复用既有信号：主窗口按选择处理
+
     def set_scanning(self, scanning: bool) -> None:
         """扫描中锁定来源操作与参数控件（②补充交互 + M4 打磨）"""
         self.btn_select.setEnabled(not scanning)
         self.drop_area.setEnabled(not scanning)
+        self.btn_recent.setEnabled(not scanning and self.btn_recent.menu()
+                                   and not self.btn_recent.menu().isEmpty())
         self.spin_threads.setEnabled(not scanning)
         self.spin_seconds.setEnabled(not scanning)
         self.btn_start.setEnabled(not scanning)

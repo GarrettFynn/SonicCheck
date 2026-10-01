@@ -197,6 +197,24 @@ class MainWindow(QMainWindow):
         self.result_table.detail_requested.connect(self.on_show_detail)
 
     # ---------------- 状态记忆（⑦-10） ----------------
+    RECENT_MAX = 5
+
+    def _load_recent_folders(self) -> list:
+        raw = self._settings.value("recent_folders", []) or []
+        if isinstance(raw, str):
+            raw = [raw]
+        return [f for f in raw if Path(f).is_dir()]
+
+    def _remember_folder(self, folder: str) -> None:
+        """V13-4：加入最近列表（去重置顶，5 个滚动淘汰）并刷新菜单"""
+        folders = self._load_recent_folders()
+        if folder in folders:
+            folders.remove(folder)
+        folders.insert(0, folder)
+        folders = folders[:self.RECENT_MAX]
+        self._settings.setValue("recent_folders", folders)
+        self.left_panel.set_recent_folders(folders)
+
     def _restore_state(self) -> None:
         geo = self._settings.value("window_geometry")
         if geo:
@@ -208,6 +226,8 @@ class MainWindow(QMainWindow):
         if header_state:
             self.result_table.restore_header_state(header_state)
         last = self._settings.value("last_folder", "")
+        # V13-4：恢复最近文件夹菜单（无论 last 是否有效都要建）
+        self.left_panel.set_recent_folders(self._load_recent_folders())
         if last and Path(last).is_dir():
             self.set_folder(last)
             self.log_panel.log("已恢复上次使用的文件夹")
@@ -257,6 +277,7 @@ class MainWindow(QMainWindow):
         self._current_folder = folder
         self.left_panel.set_folder_display(folder)
         self._settings.setValue("last_folder", folder)
+        self._remember_folder(folder)
         self.log_panel.log(f"当前文件夹: {folder}")
         self._update_safe_label()
         self._refresh_restore_enabled()
