@@ -60,8 +60,8 @@ jobs:
         env:
           PYTHONIOENCODING: utf-8
         run: |
-          $ver = python -c "import re; print(re.search(r'APP_VERSION = \"([^\"]+)\"', open('main_window.py', encoding='utf-8').read()).group(1))"
-          "version=$ver" | Out-File -Append $env:GITHUB_OUTPUT
+          $m = (Select-String -Path main_window.py -Pattern 'APP_VERSION = "(.+?)"').Matches[0]
+          "version=$($m.Groups[1].Value)" | Out-File -Append $env:GITHUB_OUTPUT
 
       - name: 压缩 zip
         shell: pwsh
