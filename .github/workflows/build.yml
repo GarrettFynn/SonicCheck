@@ -25,16 +25,18 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt -r requirements-dev.txt
 
-      - name: 下载 ffmpeg（full 仅取 ffmpeg.exe；ffprobe 用 essentials，与本地/发布决策一致）
+      - name: 下载 ffmpeg（full 仅取 ffmpeg.exe；ffprobe 用 essentials 8.1 存档，与本地/发布决策一致）
         shell: pwsh
         run: |
           # v1.4.0 决策：chromaprint 在 ffmpeg 里，ffprobe 无指纹功能用
-          # essentials——CI 必须与本地打包同构，否则体积 +127MB
+          # essentials——CI 必须与本地打包同构，否则体积 +127MB。
+          # 8.1 essentials 用 GyanD/codexffmpeg GitHub release 存档
+          # （gyan.dev 主站只保留最新 essentials，老版本 URL 会 404）
           Invoke-WebRequest -Uri 'https://www.gyan.dev/ffmpeg/builds/packages/ffmpeg-9.0.2-full_build.7z' -OutFile ffmpeg.7z
           if ((Get-Item ffmpeg.7z).Length -lt 150MB) {
             throw "ffmpeg full 包体积异常，疑似下载不完整"
           }
-          Invoke-WebRequest -Uri 'https://www.gyan.dev/ffmpeg/builds/packages/ffmpeg-8.1-essentials_build.zip' -OutFile ffmpeg_ess.zip
+          Invoke-WebRequest -Uri 'https://github.com/GyanD/codexffmpeg/releases/download/8.1/ffmpeg-8.1-essentials_build.zip' -OutFile ffmpeg_ess.zip
           if ((Get-Item ffmpeg_ess.zip).Length -lt 20MB) {
             throw "ffmpeg essentials 包体积异常"
           }
