@@ -114,6 +114,10 @@ class MainWindow(QMainWindow):
         self.log_panel.log("程序启动，请选择或拖拽一个音乐文件夹")
         self._refresh_restore_enabled()
         self._update_safe_label()
+        # V20-4：启动 3 秒后后台检查新版本（可关，静默失败）
+        if self._settings.value("settings/check_updates", True, type=bool):
+            from PyQt6.QtCore import QTimer
+            QTimer.singleShot(3000, self._check_updates_bg)
         # 首次启动自动打开使用指南（非模态，可边读边用）
         if not self._settings.value("guide_seen", False, type=bool):
             self._settings.setValue("guide_seen", True)
@@ -240,6 +244,27 @@ class MainWindow(QMainWindow):
 
     # ---------------- 状态记忆（⑦-10） ----------------
     RECENT_MAX = 5
+
+    def _check_updates_bg(self) -> None:
+        """V20-4：后台线程查 Latest，结果回主线程提示（失败静默）"""
+        import threading
+        from PyQt6.QtCore import QTimer
+
+        def work():
+            from core.update_check import check
+            new = check(APP_VERSION)
+            QTimer.singleShot(0, lambda: self._show_update_hint(new))
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _show_update_hint(self, new_tag: str) -> None:
+        if not new_tag:
+            return
+        self.log_panel.log(
+            f"发现新版本 {new_tag}，当前 v{APP_VERSION}——"
+            f"下载见 GitHub Releases 页")
+        self.statusBar().showMessage(
+            f"新版本 {new_tag} 可用（GitHub Releases 可下载）", 15000)
 
     # V13-2：v1.2.x 及以前的 QSettings 旧键 → settings/ 命名空间
     _SETTINGS_MIGRATIONS = {
