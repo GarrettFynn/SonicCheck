@@ -5,6 +5,7 @@ name: build
 on:
   push:
     tags: ['v*']
+  workflow_dispatch: {}
 
 permissions:
   contents: write
@@ -68,22 +69,26 @@ jobs:
           Compress-Archive -Path 'dist\SonicCheck\*' `
             -DestinationPath "SonicCheck_v${v}_win64.zip" -Force
 
-      - name: 挂到草稿 Release（不存在则创建）
+      - name: 挂到 CI 专属草稿（独立命名，不与正式发布冲突）
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           $v = '${{ steps.ver.outputs.version }}'
           $tag = '${{ github.ref_name }}'
-          # 幂等：已有同 tag 草稿则复用
+          # CI 产物独立标识：tag_label={tag}-ci（草稿期只是标签，发布才绑 tag）、
+          # 资产名加 _CI 后缀——正式发布的 release 是不可变的，绝不能碰
+          $tagLabel = "${tag}-ci"
+          $assetName = "SonicCheck_v${v}_win64_CI.zip"
           $draft = gh api "repos/${{ github.repository }}/releases?per_page=20" |
-            ConvertFrom-Json | Where-Object { $_.draft -and $_.tag_name -eq $tag } |
+            ConvertFrom-Json | Where-Object { $_.draft -and $_.tag_name -eq $tagLabel } |
             Select-Object -First 1
           if (-not $draft) {
-            gh release create $tag --draft --title "SonicCheck $tag" `
-              --notes "CI 自动构建草稿——请核对后人工发布" | Out-Null
-            $draft = gh api "repos/${{ github.repository }}/releases/tags/$tag" |
-              ConvertFrom-Json
+            gh release create $tagLabel --draft --title "CI build $tag" `
+              --notes "CI 自动构建（双轨对照用），勿直接发布；正式包见人工发布条目" | Out-Null
+            $draft = gh api "repos/${{ github.repository }}/releases?per_page=20" |
+              ConvertFrom-Json | Where-Object { $_.draft -and $_.tag_name -eq $tagLabel } |
+              Select-Object -First 1
           }
-          gh release upload $tag "SonicCheck_v${v}_win64.zip" --clobber
-          Write-Host "草稿已就绪: release id=$($draft.id)"
+          gh release upload $tagLabel "$assetName" --clobber
+          Write-Host "CI 草稿已就绪: release id=$($draft.id) asset=$assetName"
