@@ -63,12 +63,12 @@ jobs:
           $m = (Select-String -Path main_window.py -Pattern 'APP_VERSION = "(.+?)"').Matches[0]
           "version=$($m.Groups[1].Value)" | Out-File -Append $env:GITHUB_OUTPUT
 
-      - name: 压缩 zip
+      - name: 压缩 zip（CI 产物统一 _CI 后缀，进 CI 专属草稿）
         shell: pwsh
         run: |
           $v = '${{ steps.ver.outputs.version }}'
           Compress-Archive -Path 'dist\SonicCheck\*' `
-            -DestinationPath "SonicCheck_v${v}_win64.zip" -Force
+            -DestinationPath "SonicCheck_v${v}_win64_CI.zip" -Force
 
       - name: 挂到 CI 专属草稿（独立命名，不与正式发布冲突）
         shell: pwsh
