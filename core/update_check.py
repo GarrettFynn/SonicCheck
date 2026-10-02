@@ -17,11 +17,13 @@ _TIMEOUT = 8
 
 
 def parse_version(tag: str) -> tuple:
-    """'v1.2.0+1' → (1, 2, 0)——构建元数据不参与比较"""
-    m = re.match(r'v?(\d+)\.(\d+)\.(\d+)', (tag or '').strip())
+    """'v1.2.0+1' → (1, 2, 0)；'v2.1' → (2, 1, 0)——构建元数据
+    不参与比较；缺段补 0（两段 tag 曾使更新检查静默失效）"""
+    m = re.match(r'v?(\d+)\.(\d+)(?:\.(\d+))?', (tag or '').strip())
     if not m:
         return ()
-    return tuple(int(x) for x in m.groups())
+    parts = [x if x is not None else '0' for x in m.groups()]
+    return tuple(int(x) for x in parts)
 
 
 def fetch_latest_version() -> str:

@@ -16,6 +16,7 @@
 - 仅为用户自己账号已合法下载的文件取回解密密钥，请勿用于侵权行为。
 """
 
+import http.client
 import json
 import struct
 import sys
@@ -460,7 +461,11 @@ def fetch_ekey(song_mid: str, filename: str, cookie: str, uin: str) -> str:
     try:
         with urllib.request.urlopen(req, timeout=_API_TIMEOUT) as resp:
             result = json.loads(resp.read())
-    except (urllib.error.URLError, TimeoutError, ValueError) as exc:
+    # 审查修复（低）：补 ConnectionResetError 族（OSError 子类，断连
+    # 常见）与 IncompleteRead——此前会以非 KeyFetchError 逃逸，把整批
+    # 密钥导入打断成"全批失败"
+    except (urllib.error.URLError, TimeoutError, ValueError, OSError,
+            http.client.HTTPException) as exc:
         raise KeyFetchError(f'网络请求失败: {exc}')
 
     data = (result.get('req_1') or {}).get('data') or {}

@@ -23,12 +23,19 @@ def default_csv_name() -> str:
     return f"AudioQuality_{datetime.now():%Y%m%d_%H%M%S}.csv"
 
 
+def _esc_formula(v) -> str:
+    """CSV 公式注入防护：以 = + - @ 开头的单元格前缀单引号，
+    防止 Excel/WPS 把文件名当公式执行"""
+    s = str(v)
+    return "'" + s if s and s[0] in '=+-@' else s
+
+
 def item_to_row(item) -> dict:
     d = item.detail
     meta = d['meta']
     cutoffs = d['cutoffs']
     return {
-        '文件名': item.stem,
+        '文件名': _esc_formula(item.stem),
         '格式': meta['format'],
         '编码': meta['codec'],
         '采样率': meta['sample_rate'],
@@ -40,8 +47,9 @@ def item_to_row(item) -> dict:
         '动态范围_dB': round(d['dr'], 1),
         '立体声相关': round(d['correlation'], 3),
         '假无损': '是' if d['fake_lossless'] else '否',
-        '假无损原因': '; '.join(d['fake_reasons']) if d['fake_lossless'] else '',
-        '疑似升频': d.get('upscale_hint', ''),
+        '假无损原因': _esc_formula('; '.join(d['fake_reasons']))
+                    if d['fake_lossless'] else '',
+        '疑似升频': _esc_formula(d.get('upscale_hint', '')),
         '综合评分': round(d['score'], 1),
         '完整路径': item.filepath,
     }

@@ -53,8 +53,11 @@ def _svg_spectrum(spectrum: bytes, cliff_freq: float,
     for i, v in enumerate(db):
         if v < -119.0:
             continue
-        f1 = _SPECTRUM_F_MIN * (grid_end / _SPECTRUM_F_MIN) ** (i / 255)
-        f2 = _SPECTRUM_F_MIN * (grid_end / _SPECTRUM_F_MIN) ** ((i + 1) / 255)
+        # 审查修复（低）：网格指数分母是 SPECTRUM_POINTS（256 档
+        # 共 257 条边），与 analyzer.spectrum_grid 一致；原 /255 使
+        # 报告 SVG 高端相对 GUI 偏差约 2.8%
+        f1 = _SPECTRUM_F_MIN * (grid_end / _SPECTRUM_F_MIN) ** (i / SPECTRUM_POINTS)
+        f2 = _SPECTRUM_F_MIN * (grid_end / _SPECTRUM_F_MIN) ** ((i + 1) / SPECTRUM_POINTS)
         y = fy(v)
         if pts:
             pts.append(f"{fx(f1):.1f},{y:.1f}")
