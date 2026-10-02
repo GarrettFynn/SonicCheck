@@ -69,6 +69,14 @@ def fingerprint_file(path: str, cancel_check=None) -> bytes:
                 chunks.append(chunk)
             ret = proc.poll()
             if ret is not None:
+                # 审查修复⑧b：进程已退出但管道可能仍有未读数据——
+                # 继续读到 EOF 再判返回码，否则退出竞态会静默截断
+                # 指纹尾部（长音频比对召回率随机下降）
+                while True:
+                    tail = _os.read(fd, 1 << 16)
+                    if not tail:
+                        break
+                    chunks.append(tail)
                 if ret != 0:
                     return b''   # 解码失败/损坏文件：按无指纹降级
                 break

@@ -216,6 +216,9 @@ class AudioAnalyzer:
         fd, tmp_path = tempfile.mkstemp(suffix='.wav', prefix='aqs_',
                                         dir=str(self.temp_dir()))
         os.close(fd)
+        # 审查修复 L1：立即登记到 wav_path，Popen 失败（如 ffmpeg 被删）
+        # 时 __init__ 的 cleanup() 才能删掉这个空临时文件
+        self.wav_path = tmp_path
         cmd = [
             ffmpeg, '-y', '-hide_banner', '-loglevel', 'error',
             '-i', self.original_path,
@@ -223,29 +226,34 @@ class AudioAnalyzer:
             '-t', str(self.analyze_seconds),
             tmp_path
         ]
-        # Popen 轮询：转码期间也能响应取消（协作式取消，③-2）
+        # 审查修复⑧a：stderr 落临时文件而非 PIPE——PIPE 全程不读，
+        # 畸形文件刷 >64KB 错误会写满管道缓冲，ffmpeg 阻塞在写侧，
+        # 表现为 60s 假超时且真实错误被吞
+        err_file = tempfile.TemporaryFile()
         proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL,
-                                stderr=subprocess.PIPE,
+                                stderr=err_file,
                                 **hidden_subprocess_kwargs())
-        deadline = time.monotonic() + FFMPEG_TIMEOUT
-        while True:
-            self._check_cancel_or_kill(proc, tmp_path)
-            ret = proc.poll()
-            if ret is not None:
-                break
-            if time.monotonic() > deadline:
-                proc.kill()
-                proc.wait()
-                self._silent_remove(tmp_path)
-                raise RuntimeError(f"ffmpeg 转码超时({FFMPEG_TIMEOUT}s)")
-            time.sleep(0.05)
+        try:
+            deadline = time.monotonic() + FFMPEG_TIMEOUT
+            while True:
+                self._check_cancel_or_kill(proc, tmp_path)
+                ret = proc.poll()
+                if ret is not None:
+                    break
+                if time.monotonic() > deadline:
+                    proc.kill()
+                    proc.wait()
+                    self._silent_remove(tmp_path)
+                    raise RuntimeError(f"ffmpeg 转码超时({FFMPEG_TIMEOUT}s)")
+                time.sleep(0.05)
 
-        if ret != 0:
-            err = proc.stderr.read().decode('utf-8', errors='replace') \
-                if proc.stderr else ''
-            self._silent_remove(tmp_path)
-            raise RuntimeError(f"ffmpeg 转换失败: {err.strip()[:300]}")
-        self.wav_path = tmp_path
+            if ret != 0:
+                err_file.seek(0)
+                err = err_file.read(4096).decode('utf-8', errors='replace')
+                self._silent_remove(tmp_path)
+                raise RuntimeError(f"ffmpeg 转换失败: {err.strip()[:300]}")
+        finally:
+            err_file.close()
 
     def _check_cancel_or_kill(self, proc, tmp_path: str) -> None:
         if self._cancel_check is not None and self._cancel_check():
@@ -510,7 +518,7 @@ class AudioAnalyzer:
                 peak = max(peak, float(np.max(np.abs(ch))))
         return 20 * math.log10(peak + EPS)
 
-    # ---------------- 综合判定（口径勿动） ----------------
+    # ---------------- 综合判定（口径勿动；v2.0.2 增 0 值豁免） ----------------
     def analyze(self) -> dict:
         meta = self.get_metadata()
         cutoffs = self.compute_multi_cutoffs()
@@ -519,15 +527,21 @@ class AudioAnalyzer:
         corr = self.compute_stereo_correlation()
         peak = self.compute_peak_level()
 
+        # 审查修复②（v2.0.2 口径修订）：cutoff/DR 为 0 是"无有效数据"
+        # 的兜底值（数字静音 / 样本过短），兼具"分析失败"与"真静音"两
+        # 种语义——不参与真假判定（此前 35s 静音会被判"假无损 0Hz"，
+        # CLI --seconds 0 更是全库误判），单独以 insufficient 标记呈现
+        insufficient = cutoffs['-60dB'] <= 0 or dr == 0
+
         fake_lossless = False
         fake_reasons = []
         if cliff and cliff_freq < 20000:
             fake_lossless = True
             fake_reasons.append(f"频谱在 {cliff_freq:.0f}Hz 处断崖式截断")
-        if cutoffs['-60dB'] < 16000:
+        if 0 < cutoffs['-60dB'] < 16000:
             fake_lossless = True
             fake_reasons.append(f"-60dB截止仅 {cutoffs['-60dB']:.0f}Hz")
-        if meta['bit_depth'] >= 24 and dr < 4:
+        if meta['bit_depth'] >= 24 and 0 < dr < 4:
             fake_lossless = True
             fake_reasons.append(f"24bit但DR仅{dr:.1f}dB，疑似有损源升频")
 
@@ -541,6 +555,9 @@ class AudioAnalyzer:
             'peak': peak,
             'fake_lossless': fake_lossless,
             'fake_reasons': fake_reasons,
+            # v2.0.2：静音/过短等"数据不足"标记（仅展示，不参与判定/评分；
+            # compare_new_vs_legacy 全字段比对须与 spectrum 一并排除）
+            'insufficient': insufficient,
             # V14-3：疑似升频辅助提示（仅展示，不参与判定/评分）
             'upscale_hint': upscale_hint(meta, cutoffs, dr),
             # v1.3.0 可视化附加字段：256 点对数分档 dB 概要（float32 字节串），
