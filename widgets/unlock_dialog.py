@@ -424,8 +424,15 @@ class UnlockDialog(QDialog):
 
     # ---------------- 执行 ----------------
     def _on_start(self) -> None:
-        if self._running or self._importing or self._scanning \
-                or not self._files:
+        # 审查修复③：运行中按钮文字是"取消"，但接线仍指向本函数且被
+        # _running 守卫吞掉——点取消毫无反应、后台继续写文件。
+        # 现把运行中的点击路由到取消（与 reject() 的取消逻辑一致）。
+        if self._running:
+            self._cancel.set()
+            self.status_label.setText("正在取消…")
+            self.btn_start.setEnabled(False)
+            return
+        if self._importing or self._scanning or not self._files:
             return
         out_dir = self._out_dir()
         if not out_dir:

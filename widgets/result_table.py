@@ -150,6 +150,14 @@ class ResultTable(QWidget):
         """表头点击 → model 物理排序（proxy 保持 source 顺序直通）"""
         self.model.sort_by_column(col, order)
 
+    def apply_current_sort(self) -> None:
+        """按当前表头指示器重排（审查修复⑤）：重扫灌入的行是路径序，
+        不重排的话指示器箭头与实际顺序不一致（用户按箭头读表会读错）"""
+        hdr = self.table.horizontalHeader()
+        if hdr.sortIndicatorSection() >= 0:
+            self.model.sort_by_column(hdr.sortIndicatorSection(),
+                                      hdr.sortIndicatorOrder())
+
     # ---------------- 数据（对外 API，内部转 model 调用） ----------------
     def add_row(self, item: ResultItem) -> None:
         """新增一行（M2 起由扫描结果驱动）"""
@@ -158,6 +166,10 @@ class ResultTable(QWidget):
     def update_row_by_path(self, filepath: str, item: ResultItem) -> bool:
         """按完整路径定位并整行更新（M2 扫描回填用）"""
         return self.model.update_by_path(filepath, item)
+
+    def rename_row_path(self, old_path: str, new_path: str) -> bool:
+        """改名行同步（审查修复④）：item 已被调用方原地改写后调用"""
+        return self.model.rename_path(old_path, new_path)
 
     def clear_rows(self) -> None:
         self.model.reset_rows([])

@@ -121,10 +121,14 @@ class ResultTableModel(QAbstractTableModel):
                 return item.filepath
             if col == 4:
                 tips = list(item.fake_reasons)
-                hint = item.detail.get('upscale_hint', '') \
-                    if item.status == STATUS_DONE else ''
-                if hint:
-                    tips.append('⚠ ' + hint)
+                if item.status == STATUS_DONE:
+                    hint = item.detail.get('upscale_hint', '')
+                    if hint:
+                        tips.append('⚠ ' + hint)
+                    # v2.0.2 审查修复②：静音/过短的"数据不足"提示
+                    if item.detail.get('insufficient'):
+                        tips.append('⚠ 数据不足（静音或过短），'
+                                    '未参与真假判定')
                 if tips:
                     return "\n".join(tips)
                 if item.status == STATUS_ERROR and item.error_message:
@@ -157,6 +161,25 @@ class ResultTableModel(QAbstractTableModel):
                 return False
         self._rows[idx] = item
         self._row_by_path[filepath] = idx
+        self.dataChanged.emit(self.index(idx, 0), self.index(idx, 4))
+        return True
+
+    def rename_path(self, old_path: str, new_path: str) -> bool:
+        """改名行同步（审查修复④）：调用方已原地改写 item.filepath 后，
+        用旧键修正 _row_by_path 并通知视图重绘/重过滤。
+
+        update_by_path(old, …) 在这种时序下必然失败：行内对象已持有
+        新路径，"路径==old"的查找找不到任何行。"""
+        idx = self._row_by_path.get(old_path, -1)
+        if idx < 0 or self._rows[idx].filepath != new_path:
+            for i, r in enumerate(self._rows):
+                if r.filepath == new_path:
+                    idx = i
+                    break
+            else:
+                return False
+        self._row_by_path.pop(old_path, None)
+        self._row_by_path[new_path] = idx
         self.dataChanged.emit(self.index(idx, 0), self.index(idx, 4))
         return True
 

@@ -20,16 +20,16 @@ from PyQt6.QtCore import QObject, QRunnable, QThreadPool, pyqtSignal
 from PyQt6.QtWidgets import (QCheckBox, QFileDialog, QInputDialog,
                              QMessageBox, QProgressDialog)
 
-from core.analyzer import AudioAnalyzer
 from core.csv_exporter import default_csv_name, export_csv
 from core.deduper import (CLEAR_DIR_NAME, build_clear_plan,
                           build_restore_plan, execute_move_plan,
-                          find_duplicate_groups, load_restore_map,
+                          find_duplicate_groups,
                           prune_restore_map, record_restore_map)
 from core.ffmpeg_locator import find_ffmpeg, find_ffprobe
-from core.html_report import export_html_report
 from core.fingerprint import fingerprint_file
+from core.html_report import export_html_report
 from core.playlist import copy_matched
+from core.scanner import find_audio_files
 from core.quality_marks import POS_SUFFIX
 from core.renamer import (KIND_AUDIO, build_rename_plan, execute_copy_plan,
                           execute_plan)
@@ -69,12 +69,31 @@ class _FingerprintWorker(QRunnable):
         self.signals.done.emit(fps)
 
 
+class _EnumSignals(QObject):
+    done = pyqtSignal(list, int)   # files, skipped_dirs
+
+
+class _EnumWorker(QRunnable):
+    """后台递归枚举音频文件（审查修复⑨：万级曲库 rglob 曾在 UI 线程假死）"""
+
+    def __init__(self, root: str):
+        super().__init__()
+        self.root = root
+        self.signals = _EnumSignals()
+
+    def run(self) -> None:
+        files, skipped = find_audio_files(self.root)
+        self.signals.done.emit(files, skipped)
+
+
 class ScanController(QObject):
     """扫描启停与回调（原 MainWindow.on_start_scan 一段，字面搬移）"""
 
     def __init__(self, mw):
         super().__init__(mw)
         self.mw = mw
+        self._enumerating = False
+        self._enum_worker = None
 
     # ---- 属性转发（窗口代码习惯 mw.scan.xxx） ----
     @property
@@ -93,8 +112,8 @@ class ScanController(QObject):
         if not mw._current_folder:
             mw.log_panel.log("尚未选择文件夹，无法开始扫描")
             return
-        if mw._scan_manager.is_running:
-            return  # 扫描中重复点击（左栏已锁定，双保险）
+        if mw._scan_manager.is_running or self._enumerating:
+            return  # 扫描/枚举中重复点击（左栏已锁定，双保险）
         if not find_ffmpeg() or not find_ffprobe():
             # M4 前置防护：宁可拒绝扫描，也不让整批文件全进 error 行
             mw.log_panel.log_error(
@@ -102,11 +121,23 @@ class ScanController(QObject):
                 "内置或系统 PATH 可用后重启程序")
             return
 
-        files, skipped_dirs = find_audio_files_local(mw._current_folder)
+        # 审查修复⑨：目录枚举移入后台（万级曲库在 UI 线程 rglob 会假死）
+        self._enumerating = True
+        mw.left_panel.set_scanning(True)
+        mw.progress.set_current_file("正在清点文件…")
+        self._enum_worker = _EnumWorker(mw._current_folder)
+        self._enum_worker.signals.done.connect(self._on_files_enumerated)
+        QThreadPool.globalInstance().start(self._enum_worker)
+
+    def _on_files_enumerated(self, files: list, skipped_dirs: int) -> None:
+        mw = self.mw
+        self._enumerating = False
         if skipped_dirs > 0:
             mw.log_panel.log_error(
                 f"有 {skipped_dirs} 个子文件夹无法访问（权限不足或已损坏），已跳过")
         if not files:
+            mw.left_panel.set_scanning(False)
+            mw.progress.set_current_file("—")
             mw.log_panel.log("该文件夹（含子文件夹）中没有找到音频文件")
             return
 
@@ -156,8 +187,11 @@ class ScanController(QObject):
         mw = self.mw
         mw.left_panel.set_scanning(False)
         mw.progress.set_current_file("—")
-        # B1：退出批量模式——恢复排序/过滤（含停止路径，必须最先执行）
+        # B1：退出批量模式（v2.0 已是空实现，保留调用点）
         mw.result_table.end_update()
+        # 审查修复⑤：新灌入的行按当前表头指示器重排——否则箭头与实际
+        # 顺序不一致，用户按"最差在最前"读表会读错
+        mw.result_table.apply_current_sort()
         # 停止时把「等待/分析中…」的行统一标记为已取消，不再悬挂
         cancelled_rows = mw.result_table.mark_unfinished_cancelled() \
             if stopped else 0
@@ -181,12 +215,6 @@ class ScanController(QObject):
         else:
             mw.log_panel.log(f"扫描完成：共 {len(done_items)} 首（{detail}）")
 
-
-def find_audio_files_local(root: str):
-    """转发 core.scanner（模块尾部 import 避免循环；字面搬移期间保持
-    调用点形状不变）"""
-    from core.scanner import find_audio_files
-    return find_audio_files(root)
 
 
 class FileOpsController(QObject):
@@ -437,7 +465,9 @@ class FileOpsController(QObject):
         item.detail['filepath'] = str(p)
         item.detail['meta']['filename'] = p.name
         mw._results[item.filepath] = item
-        mw.result_table.update_row_by_path(old_path, item)
+        # 审查修复④：item 已原地改成新路径，必须走 rename_row_path
+        # （update_by_path(旧路径) 必然 False，映射表脏、右键筛选失效）
+        mw.result_table.rename_row_path(old_path, new_path)
 
     # ---------------- 对比 / 去重 / 还原 ----------------
     def on_show_detail(self, filepath: str) -> None:

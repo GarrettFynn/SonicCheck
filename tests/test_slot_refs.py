@@ -22,7 +22,8 @@ sys.path.insert(0, str(ROOT))
 LOCAL_FILES = {
     'main_window.py': {'MainWindow'},
     'app_controllers.py': {'ScanController', 'FileOpsController',
-                           '_FingerprintWorker', '_FpSignals'},
+                           '_FingerprintWorker', '_FpSignals',
+                           '_EnumWorker', '_EnumSignals'},
     'widgets/result_table.py': {'ResultTable'},
     'widgets/left_panel.py': {'LeftPanel'},
     'widgets/log_panel.py': {'LogPanel'},

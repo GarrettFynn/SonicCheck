@@ -7,8 +7,7 @@ import threading
 from datetime import datetime
 from pathlib import Path
 
-from PyQt6.QtCore import QObject, QRunnable, QSettings, Qt, QThreadPool, \
-    pyqtSignal
+from PyQt6.QtCore import QSettings, Qt, pyqtSignal
 from PyQt6.QtGui import QCloseEvent, QDragEnterEvent, QDropEvent, QIcon
 from PyQt6.QtWidgets import (QCheckBox, QDialog, QFileDialog, QFrame,
                              QHBoxLayout, QInputDialog,
@@ -56,31 +55,6 @@ DEFAULT_W, DEFAULT_H = 1200, 800
 MIN_W, MIN_H = 900, 600
 
 
-class _FpSignals(QObject):
-    progress = pyqtSignal(int, int)
-    done = pyqtSignal(dict)
-
-
-class _FingerprintWorker(QRunnable):
-    """后台批量计算 chromaprint 指纹（V14-2b：去重可选声纹比对）"""
-
-    def __init__(self, paths: list, cancel: threading.Event):
-        super().__init__()
-        self.paths = paths
-        self.cancel = cancel
-        self.signals = _FpSignals()
-
-    def run(self) -> None:
-        fps = {}
-        total = len(self.paths)
-        for i, p in enumerate(self.paths):
-            if self.cancel.is_set():
-                break
-            fps[p] = fingerprint_file(p, cancel_check=self.cancel.is_set)
-            self.signals.progress.emit(i + 1, total)
-        self.signals.done.emit(fps)
-
-
 def resource_path(rel: str) -> str:
     """资源路径：兼容源码运行与 PyInstaller 打包（--add-data）两种环境"""
     base = getattr(sys, "_MEIPASS", None)
@@ -90,6 +64,10 @@ def resource_path(rel: str) -> str:
 
 
 class MainWindow(QMainWindow):
+    # V20-1.1（审查修复①）：更新检查结果由后台线程 emit 此信号回主线程
+    # ——QTimer 不能在无事件循环的 Python 线程里用（原实现提示永不出现）
+    update_hint_ready = pyqtSignal(str)
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle(f"{DISPLAY_NAME} {APP_NAME} v{APP_VERSION}")
@@ -100,7 +78,6 @@ class MainWindow(QMainWindow):
         self._settings = QSettings()
         self._current_folder = ""
         self._results = {}  # filepath -> ResultItem（M3 导出/重命名的数据源）
-        self._fp_dlg = None  # V14-2b：声纹采集进度对话框（QProgressDialog）
 
         self._migrate_settings()  # V13-2：旧键一次性迁入 settings/
         self._load_marks_config()
@@ -115,6 +92,7 @@ class MainWindow(QMainWindow):
         self._refresh_restore_enabled()
         self._update_safe_label()
         # V20-4：启动 3 秒后后台检查新版本（可关，静默失败）
+        self.update_hint_ready.connect(self._show_update_hint)
         if self._settings.value("settings/check_updates", True, type=bool):
             from PyQt6.QtCore import QTimer
             QTimer.singleShot(3000, self._check_updates_bg)
@@ -248,12 +226,12 @@ class MainWindow(QMainWindow):
     def _check_updates_bg(self) -> None:
         """V20-4：后台线程查 Latest，结果回主线程提示（失败静默）"""
         import threading
-        from PyQt6.QtCore import QTimer
-
         def work():
+            # 审查修复①：线程里只 emit 信号（queued 回主线程槽）。
+            # QTimer.singleShot 不能在无事件循环的 Python 线程使用——
+            # 回调永不派发，更新提示曾是静默死功能
             from core.update_check import check
-            new = check(APP_VERSION)
-            QTimer.singleShot(0, lambda: self._show_update_hint(new))
+            self.update_hint_ready.emit(check(APP_VERSION))
 
         threading.Thread(target=work, daemon=True).start()
 
@@ -366,6 +344,16 @@ class MainWindow(QMainWindow):
 
     # ---------------- 业务槽（M1 为占位实现） ----------------
     def set_folder(self, folder: str) -> None:
+        # 审查修复⑥：切换到不同文件夹时清空上次结果——否则旧文件夹的
+        # 结果残留，去重/重命名/歌单会把 A 的文件写进 B 的目录树
+        changed = folder != self._current_folder
+        if changed and self._results:
+            self._results.clear()
+            self.result_table.clear_rows()
+            self.progress.reset()
+            self.summary_bar.reset()
+            self.result_table.set_actions_enabled(False)
+            self.log_panel.log("已切换文件夹，清空上次扫描结果")
         self._current_folder = folder
         self.left_panel.set_folder_display(folder)
         self._settings.setValue("settings/last_folder", folder)
